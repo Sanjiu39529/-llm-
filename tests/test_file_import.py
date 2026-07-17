@@ -415,3 +415,124 @@ def test_repository_binds_decimal_without_binary_float_loss() -> None:
         }), 1)
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT CAST(payment_amount AS TEXT) FROM payment_info")) == "0.11"
+
+
+def _create_payment_import_tables(engine: object) -> None:
+    _create_import_tables(
+        engine,
+        """
+        CREATE TABLE payment_info (
+            order_id TEXT NOT NULL, paid_at DATETIME NOT NULL,
+            payment_amount TEXT NOT NULL, is_outlier BOOLEAN NOT NULL,
+            import_batch_id INTEGER NOT NULL
+        )
+        """,
+    )
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE order_info (order_id TEXT PRIMARY KEY)"))
+
+
+@pytest.mark.parametrize("file_type", ["csv", "xlsx"])
+def test_file_to_service_preserves_text_ids_and_decimal_boundaries(
+    tmp_path: Path, file_type: str
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_payment_import_tables(engine)
+    rows = pd.DataFrame({
+        "order_id": ["00123", "00999", "00001"],
+        "paid_at": ["2026-01-01", "2026-01-02", "2026-01-03"],
+        "payment_amount": ["0.105", "9999999999999999.99", "10000000000000000.00"],
+    })
+    if file_type == "csv":
+        path = tmp_path / "payments.csv"
+        rows.to_csv(path, index=False)
+        report = ImportService(engine).import_file(path, target_table="payment_info")
+    else:
+        path = tmp_path / "payments.xlsx"
+        with pd.ExcelWriter(path) as writer:
+            rows.to_excel(writer, sheet_name="payment_info", index=False)
+        report = ImportService(engine).import_file(path)
+
+    assert report.written_rows == 2
+    assert report.skipped_rows == 1
+    with engine.connect() as connection:
+        stored = connection.execute(text(
+            "SELECT order_id, payment_amount FROM payment_info ORDER BY paid_at"
+        )).all()
+    assert stored == [("00123", "0.11"), ("00999", "9999999999999999.99")]
+
+
+def test_child_only_import_checks_database_parent_keys(tmp_path: Path) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_import_tables(engine, """
+        CREATE TABLE order_info (
+            order_id TEXT PRIMARY KEY, user_id TEXT, order_time DATETIME,
+            is_outlier BOOLEAN, import_batch_id INTEGER NOT NULL
+        )
+    """)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE user_info (user_id TEXT PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO user_info (user_id) VALUES ('known')"))
+    path = tmp_path / "orders.csv"
+    path.write_text(
+        "order_id,user_id,order_time\no1,known,2026-01-01\no2,missing,2026-01-01\n",
+        encoding="utf-8",
+    )
+
+    ImportService(engine).import_file(path, target_table="order_info")
+
+    with engine.connect() as connection:
+        audit = json.loads(connection.scalar(text("SELECT quality_summary FROM import_batch")))
+    assert audit["relationship_anomalies"] == {
+        "order_info.user_id": {"missing_parent": 1}
+    }
+
+
+def test_batch_parent_subset_unions_existing_database_parents(tmp_path: Path) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_import_tables(
+        engine, "CREATE TABLE user_info (user_id TEXT PRIMARY KEY, import_batch_id INTEGER NOT NULL)"
+    )
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO user_info VALUES ('existing', 99)"))
+        connection.execute(text("""
+            CREATE TABLE order_info (
+                order_id TEXT PRIMARY KEY, user_id TEXT, order_time DATETIME,
+                is_outlier BOOLEAN, import_batch_id INTEGER NOT NULL
+            )
+        """))
+    path = tmp_path / "subset.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        pd.DataFrame({"user_id": ["new"]}).to_excel(writer, sheet_name="user_info", index=False)
+        pd.DataFrame({
+            "order_id": ["o1", "o2"], "user_id": ["new", "existing"],
+            "order_time": ["2026-01-01"] * 2,
+        }).to_excel(writer, sheet_name="order_info", index=False)
+
+    ImportService(engine).import_file(path)
+
+    with engine.connect() as connection:
+        audit = json.loads(connection.scalar(text("SELECT quality_summary FROM import_batch ORDER BY id DESC LIMIT 1")))
+    assert audit["relationship_anomalies"] == {}
+
+
+def test_duplicate_check_uses_one_set_query_per_key_shape() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE user_info (user_id TEXT PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO user_info VALUES ('u3')"))
+    selects: list[str] = []
+
+    from sqlalchemy import event
+    event.listen(
+        engine,
+        "before_cursor_execute",
+        lambda conn, cursor, statement, parameters, context, executemany:
+            selects.append(statement) if statement.startswith("SELECT COUNT(*) FROM user_info") else None,
+    )
+    with engine.connect() as connection:
+        count = ImportRepository(batch_size=100).duplicate_count(
+            connection, "user_info", pd.DataFrame({"user_id": [f"u{i}" for i in range(10)]})
+        )
+    assert count == 1
+    assert len(selects) == 1

@@ -86,14 +86,57 @@ class ImportRepository:
         """在写入前主动检查数据库中已经存在的业务键。"""
         if frame.empty:
             return 0
-        key_rows = _key_rows(table_name, frame)
+        grouped: dict[tuple[str, ...], list[tuple[Any, ...]]] = {}
+        for columns, values in _key_rows(table_name, frame):
+            grouped.setdefault(columns, []).append(values)
+
         count = 0
-        for columns, values in key_rows:
-            predicates = " AND ".join(f"{column} = :key_{index}" for index, column in enumerate(columns))
-            parameters = {f"key_{index}": _database_value(value) for index, value in enumerate(values)}
-            if connection.scalar(text(f"SELECT 1 FROM {table_name} WHERE {predicates} LIMIT 1"), parameters):
-                count += 1
+        for columns, values_group in grouped.items():
+            for start in range(0, len(values_group), self._batch_size):
+                parameters: dict[str, Any] = {}
+                alternatives = []
+                for row_index, values in enumerate(
+                    values_group[start : start + self._batch_size]
+                ):
+                    predicates = []
+                    for column_index, (column, value) in enumerate(zip(columns, values)):
+                        name = f"key_{row_index}_{column_index}"
+                        predicates.append(f"{column} = :{name}")
+                        parameters[name] = _database_value(value)
+                    alternatives.append("(" + " AND ".join(predicates) + ")")
+                statement = text(
+                    f"SELECT COUNT(*) FROM {table_name} WHERE "
+                    + " OR ".join(alternatives)
+                )
+                count += int(connection.scalar(statement, parameters) or 0)
         return count
+
+    def existing_values(
+        self,
+        connection: Connection,
+        table_name: str,
+        column: str,
+        candidates: set[Any],
+    ) -> set[Any]:
+        """集合式读取数据库已有父键，查询也受数据库分块大小约束。"""
+        contract = TABLE_CONTRACTS[table_name]
+        if column not in contract.aliases:
+            raise ValueError(f"unsupported relationship column: {table_name}.{column}")
+        values = sorted(candidates, key=str)
+        existing: set[Any] = set()
+        for start in range(0, len(values), self._batch_size):
+            chunk = values[start : start + self._batch_size]
+            parameters = {
+                f"value_{index}": _database_value(value)
+                for index, value in enumerate(chunk)
+            }
+            placeholders = ", ".join(f":value_{index}" for index in range(len(chunk)))
+            rows = connection.execute(
+                text(f"SELECT {column} FROM {table_name} WHERE {column} IN ({placeholders})"),
+                parameters,
+            )
+            existing.update(row[0] for row in rows)
+        return existing
 
     def complete_batch(
         self,

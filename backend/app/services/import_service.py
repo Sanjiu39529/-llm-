@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine
 
 from backend.app.database.repository import ImportRepository
 from backend.app.datasources.base import STANDARD_TABLES
@@ -80,7 +80,7 @@ class ImportService:
                 }
                 for table_name in frames
             },
-            "relationship_anomalies": _relationship_anomalies(cleaned),
+            "relationship_anomalies": {},
         }
 
         with self._engine.begin() as connection:
@@ -92,6 +92,9 @@ class ImportService:
         error_code = "database_write_failed"
         try:
             with self._engine.begin() as connection:
+                quality_audit["relationship_anomalies"] = _relationship_anomalies(
+                    connection, self._repository, cleaned
+                )
                 for table_name, result in cleaned.items():
                     duplicate_count = self._repository.duplicate_count(
                         connection, table_name, result.frame
@@ -125,8 +128,12 @@ class ImportService:
         )
 
 
-def _relationship_anomalies(cleaned: dict[str, CleanResult]) -> dict[str, dict[str, int]]:
-    """检查同一文件中可判定的父子关联，不因缺表臆测异常。"""
+def _relationship_anomalies(
+    connection: Connection,
+    repository: ImportRepository,
+    cleaned: dict[str, CleanResult],
+) -> dict[str, dict[str, int]]:
+    """用本批父键与数据库父键的并集检查关联异常。"""
     rules = (
         ("order_info", "user_id", "user_info", "user_id"),
         ("order_item", "order_id", "order_info", "order_id"),
@@ -141,14 +148,23 @@ def _relationship_anomalies(cleaned: dict[str, CleanResult]) -> dict[str, dict[s
     )
     anomalies: dict[str, dict[str, int]] = {}
     for child, child_field, parent, parent_field in rules:
-        if child not in cleaned or parent not in cleaned:
+        if child not in cleaned:
             continue
         child_frame = cleaned[child].frame
-        parent_frame = cleaned[parent].frame
-        if child_field not in child_frame or parent_field not in parent_frame:
+        if child_field not in child_frame:
             continue
         populated = child_frame[child_field].dropna()
-        missing = ~populated.isin(set(parent_frame[parent_field].dropna()))
+        batch_parent_values: set[Any] = set()
+        if parent in cleaned and parent_field in cleaned[parent].frame:
+            batch_parent_values.update(cleaned[parent].frame[parent_field].dropna())
+        database_parent_values = repository.existing_values(
+            connection,
+            parent,
+            parent_field,
+            set(populated) - batch_parent_values,
+        )
+        known_parent_values = batch_parent_values | database_parent_values
+        missing = ~populated.isin(known_parent_values)
         if missing.any():
             anomalies[f"{child}.{child_field}"] = {"missing_parent": int(missing.sum())}
     return anomalies

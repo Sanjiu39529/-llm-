@@ -228,10 +228,14 @@ def _clean_age(frame: pd.DataFrame, summary: CleanSummary) -> None:
         return
 
     ages = pd.to_numeric(frame["age"], errors="coerce")
-    invalid = ages.lt(1) | ages.gt(100)
+    fractional = ages.notna() & ages.mod(1).ne(0)
+    invalid = ages.lt(1) | ages.gt(100) | fractional
     summary.invalid += int(invalid.sum())
-    if invalid.any():
-        summary.record("age", "age_out_of_range", int(invalid.sum()))
+    out_of_range = ages.lt(1) | ages.gt(100)
+    if out_of_range.any():
+        summary.record("age", "age_out_of_range", int(out_of_range.sum()))
+    if fractional.any():
+        summary.record("age", "invalid_integer", int(fractional.sum()))
     unparsable = ~frame["age"].map(_is_blank) & ages.isna()
     if unparsable.any():
         summary.record("age", "invalid_integer", int(unparsable.sum()))

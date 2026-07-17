@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS payment_info (
     payment_status VARCHAR(64) NULL,
     is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
+    UNIQUE KEY uq_payment_info_id (payment_id),
+    UNIQUE KEY uq_payment_info_business_key (order_id, paid_at, payment_amount),
     INDEX idx_payment_info_order_paid (order_id, paid_at),
     INDEX idx_payment_info_batch_paid (import_batch_id, paid_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -89,6 +91,8 @@ CREATE TABLE IF NOT EXISTS refund_info (
     refund_status VARCHAR(64) NULL,
     is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
+    UNIQUE KEY uq_refund_info_id (refund_id),
+    UNIQUE KEY uq_refund_info_business_key (order_id, refunded_at, refund_amount),
     INDEX idx_refund_info_order_refunded (order_id, refunded_at),
     INDEX idx_refund_info_batch_refunded (import_batch_id, refunded_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

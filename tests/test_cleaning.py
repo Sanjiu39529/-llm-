@@ -227,3 +227,12 @@ def test_age_mean_is_stored_as_an_integer() -> None:
     }))
     assert result.frame["age"].tolist() == [20, 21, 21]
     assert all(isinstance(value, int) for value in result.frame["age"])
+
+
+def test_fractional_age_is_invalid_then_filled_without_truncation() -> None:
+    result = clean_frame("user_info", pd.DataFrame({
+        "user_id": ["a", "b", "c", "d"], "age": [20, 21, 20.5, None],
+    }))
+    assert result.frame["age"].tolist() == [20, 21, 21, 21]
+    assert result.summary.reasons["age"]["invalid_integer"] == 1
+    assert result.summary.filled["age"] == 2

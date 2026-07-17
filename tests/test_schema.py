@@ -102,3 +102,25 @@ def test_schema_persists_age_outlier_and_failed_audit_fields() -> None:
     assert "age INT NULL" in sql
     assert sql.count("is_outlier BOOLEAN NOT NULL DEFAULT FALSE") == 7
     assert "error_code VARCHAR(64) NULL" in sql
+
+
+def test_schema_enforces_payment_and_refund_business_keys() -> None:
+    sql = Path("sql/001_schema.sql").read_text(encoding="utf-8")
+    assert "UNIQUE KEY uq_payment_info_id (payment_id)" in sql
+    assert "UNIQUE KEY uq_payment_info_business_key (order_id, paid_at, payment_amount)" in sql
+    assert "UNIQUE KEY uq_refund_info_id (refund_id)" in sql
+    assert "UNIQUE KEY uq_refund_info_business_key (order_id, refunded_at, refund_amount)" in sql
+
+
+def test_integrity_upgrade_migration_contains_all_phase_one_additions() -> None:
+    migration = Path("sql/002_phase1_integrity_upgrade.sql").read_text(encoding="utf-8")
+    for fragment in (
+        "ADD COLUMN error_code VARCHAR(64) NULL",
+        "ADD COLUMN age INT NULL",
+        "ADD COLUMN is_outlier BOOLEAN NOT NULL DEFAULT FALSE",
+        "ADD UNIQUE KEY uq_payment_info_business_key",
+        "ADD UNIQUE KEY uq_payment_info_id",
+        "ADD UNIQUE KEY uq_refund_info_business_key",
+        "ADD UNIQUE KEY uq_refund_info_id",
+    ):
+        assert fragment in migration
