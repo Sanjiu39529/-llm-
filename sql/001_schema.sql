@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS import_batch (
     status VARCHAR(32) NOT NULL,
     field_mapping JSON NOT NULL,
     quality_summary JSON NOT NULL,
+    error_code VARCHAR(64) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME NULL,
     INDEX idx_import_batch_table_created (table_name, created_at)
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS user_info (
     phone VARCHAR(64) NULL,
     email VARCHAR(255) NULL,
     register_time DATETIME NULL,
+    age INT NULL,
     import_batch_id BIGINT UNSIGNED NOT NULL,
     INDEX idx_user_info_batch_user (import_batch_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -35,6 +37,7 @@ CREATE TABLE IF NOT EXISTS product_info (
     brand VARCHAR(128) NULL,
     price DECIMAL(18,2) NULL,
     stock INT NULL,
+    is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
     INDEX idx_product_info_category_brand (category, brand)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -46,6 +49,7 @@ CREATE TABLE IF NOT EXISTS order_info (
     channel VARCHAR(64) NULL,
     order_status VARCHAR(64) NULL,
     order_amount DECIMAL(18,2) NULL,
+    is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
     INDEX idx_order_info_user_time (user_id, order_time),
     INDEX idx_order_info_channel_time (channel, order_time)
@@ -57,6 +61,7 @@ CREATE TABLE IF NOT EXISTS order_item (
     quantity INT NOT NULL,
     unit_price DECIMAL(18,2) NULL,
     item_amount DECIMAL(18,2) NULL,
+    is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY (order_id, product_id),
     INDEX idx_order_item_product_order (product_id, order_id)
@@ -69,6 +74,7 @@ CREATE TABLE IF NOT EXISTS payment_info (
     payment_amount DECIMAL(18,2) NOT NULL,
     payment_method VARCHAR(64) NULL,
     payment_status VARCHAR(64) NULL,
+    is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
     INDEX idx_payment_info_order_paid (order_id, paid_at),
     INDEX idx_payment_info_batch_paid (import_batch_id, paid_at)
@@ -81,6 +87,7 @@ CREATE TABLE IF NOT EXISTS refund_info (
     refunded_at DATETIME NOT NULL,
     refund_reason VARCHAR(255) NULL,
     refund_status VARCHAR(64) NULL,
+    is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
     INDEX idx_refund_info_order_refunded (order_id, refunded_at),
     INDEX idx_refund_info_batch_refunded (import_batch_id, refunded_at)
@@ -117,6 +124,7 @@ CREATE TABLE IF NOT EXISTS ads_info (
     impressions BIGINT NULL,
     clicks BIGINT NULL,
     cost DECIMAL(18,2) NULL,
+    is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY (ad_id, ad_date),
     INDEX idx_ads_info_campaign_date (campaign_id, ad_date),
@@ -129,6 +137,7 @@ CREATE TABLE IF NOT EXISTS ad_attribution (
     attributed_at DATETIME NOT NULL,
     user_id VARCHAR(64) NULL,
     attribution_amount DECIMAL(18,2) NULL,
+    is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
     import_batch_id BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY (order_id, ad_id, attributed_at),
     INDEX idx_ad_attribution_ad_time (ad_id, attributed_at),

@@ -3,6 +3,7 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import pandas as pd
 
@@ -18,8 +19,8 @@ _BUSINESS_KEYS = {
     "order_item": ("order_id", "product_id"),
     "traffic_visit": ("visit_id",),
     "behavior_info": ("event_id",),
-    "ads_info": ("ad_id",),
-    "ad_attribution": ("order_id", "ad_id"),
+    "ads_info": ("ad_id", "ad_date"),
+    "ad_attribution": ("order_id", "ad_id", "attributed_at"),
 }
 _OPTIONAL_ID_KEYS = {
     "payment_info": ("payment_id", ("order_id", "paid_at", "payment_amount")),
@@ -49,6 +50,20 @@ _AMOUNT_COLUMNS = frozenset(
         "attribution_amount",
     }
 )
+_INTEGER_COLUMNS = frozenset({"age", "stock", "quantity", "impressions", "clicks"})
+_DECIMAL_MAX = Decimal("9999999999999999.99")
+_DECIMAL_QUANTUM = Decimal("0.01")
+_INTEGER_LIMITS = {
+    "stock": (0, 2_147_483_647),
+    "quantity": (1, 2_147_483_647),
+    "impressions": (0, 9_223_372_036_854_775_807),
+    "clicks": (0, 9_223_372_036_854_775_807),
+}
+_TEXT_LIMITS = {
+    "user_name": 255, "email": 255, "product_name": 255,
+    "refund_reason": 255, "page_url": 2048,
+    "category": 128, "brand": 128,
+}
 _CHANNEL_ALIASES = {
     "自然搜索": "自然搜索",
     "seo": "自然搜索",
@@ -72,6 +87,11 @@ class CleanSummary:
     deduplicated: int = 0
     invalid: int = 0
     unknown_values: int = 0
+    reasons: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def record(self, column: str, reason: str, count: int = 1) -> None:
+        reasons = self.reasons.setdefault(column, {})
+        reasons[reason] = reasons.get(reason, 0) + count
 
 
 @dataclass(slots=True)
@@ -82,34 +102,124 @@ class CleanResult:
     summary: CleanSummary
 
 
-def _drop_invalid_dates(frame: pd.DataFrame, summary: CleanSummary) -> pd.DataFrame:
-    """移除无法解析或晚于当天的日期记录。"""
+def _is_blank(value: object) -> bool:
+    return pd.isna(value) or (isinstance(value, str) and not value.strip())
+
+
+def _decimal_value(value: object) -> Decimal | None:
+    try:
+        result = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+    return result if result.is_finite() else None
+
+
+def _validate_rows(
+    table_name: str, frame: pd.DataFrame, summary: CleanSummary
+) -> pd.DataFrame:
+    """在数据库写入前逐行验证必填值、类型和值域。"""
+    contract = TABLE_CONTRACTS[table_name]
+    invalid_rows = pd.Series(False, index=frame.index)
+
+    for column in contract.required_fields:
+        if column not in frame:
+            continue
+        blank = frame[column].map(_is_blank)
+        if blank.any():
+            summary.record(column, "required_blank", int(blank.sum()))
+            summary.invalid += int(blank.sum())
+            invalid_rows |= blank
+
     for column in _DATE_COLUMNS.intersection(frame.columns):
+        blank = frame[column].map(_is_blank)
         parsed = pd.to_datetime(frame[column], errors="coerce")
-        invalid = parsed.isna() | (parsed.dt.date > date.today())
-        if invalid.any():
-            count = int(invalid.sum())
-            summary.skipped += count
-            summary.invalid += count
-            frame = frame.loc[~invalid].copy()
-            parsed = parsed.loc[~invalid]
-        frame[column] = parsed
-    return frame
+        bad_parse = ~blank & parsed.isna()
+        if bad_parse.any():
+            summary.record(column, "invalid_datetime", int(bad_parse.sum()))
+            summary.invalid += int(bad_parse.sum())
+            invalid_rows |= bad_parse
+        if column == "order_time":
+            future = parsed.notna() & (parsed.dt.date > date.today())
+            if future.any():
+                summary.record(column, "future_order_time", int(future.sum()))
+                summary.invalid += int(future.sum())
+                invalid_rows |= future
+        frame[column] = parsed.where(~blank, None)
 
-
-def _drop_non_positive_amounts(frame: pd.DataFrame, summary: CleanSummary) -> pd.DataFrame:
-    """移除金额或价格小于等于零的记录。"""
     for column in _AMOUNT_COLUMNS.intersection(frame.columns):
-        amounts = pd.to_numeric(frame[column], errors="coerce")
-        invalid = amounts.le(0).fillna(False)
-        if invalid.any():
-            count = int(invalid.sum())
-            summary.skipped += count
-            summary.invalid += count
-            frame = frame.loc[~invalid].copy()
-            amounts = amounts.loc[~invalid]
-        frame[column] = amounts
-    return frame
+        converted: list[Decimal | None] = []
+        bad_parse = pd.Series(False, index=frame.index)
+        bad_range = pd.Series(False, index=frame.index)
+        for index, value in frame[column].items():
+            if _is_blank(value):
+                converted.append(None)
+                continue
+            amount = _decimal_value(value)
+            if amount is None:
+                bad_parse.loc[index] = True
+                converted.append(None)
+            elif amount <= 0 or amount > _DECIMAL_MAX:
+                bad_range.loc[index] = True
+                converted.append(None)
+            else:
+                converted.append(amount.quantize(_DECIMAL_QUANTUM, rounding=ROUND_HALF_UP))
+        if bad_parse.any():
+            summary.record(column, "invalid_decimal", int(bad_parse.sum()))
+        if bad_range.any():
+            summary.record(column, "decimal_out_of_range", int(bad_range.sum()))
+        violations = bad_parse | bad_range
+        summary.invalid += int(violations.sum())
+        invalid_rows |= violations
+        frame[column] = converted
+
+    typed_fields = _DATE_COLUMNS | _AMOUNT_COLUMNS | _INTEGER_COLUMNS
+    for column in (set(contract.aliases) - typed_fields).intersection(frame.columns):
+        converted: list[str | None] = []
+        too_long = pd.Series(False, index=frame.index)
+        limit = _TEXT_LIMITS.get(column, 64)
+        for index, value in frame[column].items():
+            if _is_blank(value):
+                converted.append(None)
+                continue
+            text_value = str(value).strip()
+            if len(text_value) > limit:
+                too_long.loc[index] = True
+                converted.append(None)
+            else:
+                converted.append(text_value)
+        if too_long.any():
+            summary.record(column, "text_too_long", int(too_long.sum()))
+            summary.invalid += int(too_long.sum())
+            invalid_rows |= too_long
+        frame[column] = converted
+
+    for column in (_INTEGER_COLUMNS - {"age"}).intersection(frame.columns):
+        converted: list[int | None] = []
+        bad = pd.Series(False, index=frame.index)
+        for index, value in frame[column].items():
+            if _is_blank(value):
+                converted.append(None)
+                continue
+            number = _decimal_value(value)
+            minimum, maximum = _INTEGER_LIMITS[column]
+            if number is None or number != number.to_integral_value():
+                bad.loc[index] = True
+                converted.append(None)
+            elif number < minimum or number > maximum:
+                converted.append(None)
+                summary.record(column, "integer_out_of_range")
+                summary.invalid += 1
+                invalid_rows.loc[index] = True
+            else:
+                converted.append(int(number))
+        if bad.any():
+            summary.record(column, "invalid_integer", int(bad.sum()))
+            summary.invalid += int(bad.sum())
+            invalid_rows |= bad
+        frame[column] = converted
+
+    summary.skipped += int(invalid_rows.sum())
+    return frame.loc[~invalid_rows].copy()
 
 
 def _clean_age(frame: pd.DataFrame, summary: CleanSummary) -> None:
@@ -120,15 +230,22 @@ def _clean_age(frame: pd.DataFrame, summary: CleanSummary) -> None:
     ages = pd.to_numeric(frame["age"], errors="coerce")
     invalid = ages.lt(1) | ages.gt(100)
     summary.invalid += int(invalid.sum())
+    if invalid.any():
+        summary.record("age", "age_out_of_range", int(invalid.sum()))
+    unparsable = ~frame["age"].map(_is_blank) & ages.isna()
+    if unparsable.any():
+        summary.record("age", "invalid_integer", int(unparsable.sum()))
+        summary.invalid += int(unparsable.sum())
     ages = ages.mask(invalid)
     valid_mean = ages.mean()
     missing = ages.isna()
     if pd.notna(valid_mean):
         summary.filled["age"] = int(missing.sum())
-        ages = ages.fillna(valid_mean)
+        mean_age = int(Decimal(str(valid_mean)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        ages = ages.fillna(mean_age)
     elif missing.any():
         summary.filled["age"] = 0
-    frame["age"] = ages
+    frame["age"] = ages.map(lambda value: int(value) if pd.notna(value) else None)
 
 
 def _clean_channel(frame: pd.DataFrame, summary: CleanSummary) -> None:
@@ -154,7 +271,7 @@ def _mark_outliers(frame: pd.DataFrame) -> None:
 
     outliers = pd.Series(False, index=frame.index)
     for column in amount_columns:
-        amounts = frame[column]
+        amounts = pd.to_numeric(frame[column], errors="coerce")
         q1, q3 = amounts.quantile([0.25, 0.75])
         outliers |= amounts.gt(q3 + 3 * (q3 - q1)).fillna(False)
     frame["is_outlier"] = outliers
@@ -190,13 +307,15 @@ def clean_frame(table_name: str, frame: pd.DataFrame) -> CleanResult:
 
     cleaned = frame.copy()
     summary = CleanSummary()
+    cleaned = _validate_rows(table_name, cleaned, summary)
+    _clean_age(cleaned, summary)
     duplicate = _deduplicate(cleaned, table_name)
     summary.deduplicated = int(duplicate.sum())
     cleaned = cleaned.loc[~duplicate].copy()
 
-    cleaned = _drop_invalid_dates(cleaned, summary)
-    cleaned = _drop_non_positive_amounts(cleaned, summary)
-    _clean_age(cleaned, summary)
     _clean_channel(cleaned, summary)
     _mark_outliers(cleaned)
+    for column in TABLE_CONTRACTS[table_name].generated_fields:
+        if column not in cleaned:
+            cleaned[column] = False
     return CleanResult(frame=cleaned.reset_index(drop=True), summary=summary)

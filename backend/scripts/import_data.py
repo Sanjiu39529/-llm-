@@ -28,8 +28,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """执行一次导入，并将报告或错误输出为 JSON。"""
     try:
         args = _parser().parse_args(argv)
-        engine = create_engine(Settings().database_url)
-        report = ImportService(engine).import_file(args.file, args.table)
+        settings = Settings()
+        engine = create_engine(settings.database_url)
+        report = ImportService(engine, batch_size=settings.import_batch_size).import_file(
+            args.file, args.table
+        )
         print(json.dumps(asdict(report), ensure_ascii=False))
         return 0
     except Exception as exc:

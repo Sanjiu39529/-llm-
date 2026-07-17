@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import Engine
 
@@ -23,6 +24,10 @@ class ImportReport:
     missing_tables: list[str]
 
 
+class CrossBatchDuplicateError(ValueError):
+    """新批次包含数据库中已存在业务键时的稳定领域错误。"""
+
+
 class ImportService:
     """完成读取、自动映射校验、清洗和单事务写入。"""
 
@@ -31,10 +36,11 @@ class ImportService:
         engine: Engine,
         adapter: FileImportAdapter | None = None,
         repository: ImportRepository | None = None,
+        batch_size: int = 1000,
     ) -> None:
         self._engine = engine
         self._adapter = adapter or FileImportAdapter()
-        self._repository = repository or ImportRepository()
+        self._repository = repository or ImportRepository(batch_size=batch_size)
 
     def import_file(
         self, path: Path, target_table: str | None = None
@@ -62,21 +68,52 @@ class ImportService:
         mapping_audit = {
             table_name: result.mapping for table_name, result in mappings.items()
         }
-        quality_audit = {
-            table_name: asdict(result.summary) for table_name, result in cleaned.items()
+        missing_tables = sorted(STANDARD_TABLES.difference(frames))
+        quality_audit: dict[str, Any] = {
+            "missing_tables": missing_tables,
+            "tables": {
+                table_name: {
+                    **asdict(cleaned[table_name].summary),
+                    "unmapped_source_columns": sorted(
+                        set(frames[table_name].columns) - set(mappings[table_name].mapping)
+                    ),
+                }
+                for table_name in frames
+            },
+            "relationship_anomalies": _relationship_anomalies(cleaned),
         }
 
         with self._engine.begin() as connection:
             batch_id = self._repository.create_batch(
-                connection, path.name, list(frames), mapping_audit
+                connection, path.name, list(frames), mapping_audit, quality_audit
             )
-            written_rows = sum(
-                self._repository.write_frame(
-                    connection, table_name, result.frame, batch_id
+
+        written_rows = 0
+        error_code = "database_write_failed"
+        try:
+            with self._engine.begin() as connection:
+                for table_name, result in cleaned.items():
+                    duplicate_count = self._repository.duplicate_count(
+                        connection, table_name, result.frame
+                    )
+                    if duplicate_count:
+                        error_code = "cross_batch_duplicate"
+                        raise CrossBatchDuplicateError(
+                            f"cross_batch_duplicate: table={table_name} count={duplicate_count}"
+                        )
+                written_rows = sum(
+                    self._repository.write_frame(
+                        connection, table_name, result.frame, batch_id
+                    )
+                    for table_name, result in cleaned.items()
                 )
-                for table_name, result in cleaned.items()
-            )
-            self._repository.complete_batch(connection, batch_id, quality_audit)
+                self._repository.complete_batch(connection, batch_id, quality_audit)
+        except Exception:
+            with self._engine.begin() as connection:
+                self._repository.fail_batch(
+                    connection, batch_id, error_code, quality_audit
+                )
+            raise
 
         skipped_rows = sum(_skipped_rows(result) for result in cleaned.values())
         return ImportReport(
@@ -84,8 +121,37 @@ class ImportService:
             processed_tables=list(frames),
             written_rows=written_rows,
             skipped_rows=skipped_rows,
-            missing_tables=sorted(STANDARD_TABLES.difference(frames)),
+            missing_tables=missing_tables,
         )
+
+
+def _relationship_anomalies(cleaned: dict[str, CleanResult]) -> dict[str, dict[str, int]]:
+    """检查同一文件中可判定的父子关联，不因缺表臆测异常。"""
+    rules = (
+        ("order_info", "user_id", "user_info", "user_id"),
+        ("order_item", "order_id", "order_info", "order_id"),
+        ("order_item", "product_id", "product_info", "product_id"),
+        ("payment_info", "order_id", "order_info", "order_id"),
+        ("refund_info", "order_id", "order_info", "order_id"),
+        ("behavior_info", "user_id", "user_info", "user_id"),
+        ("behavior_info", "product_id", "product_info", "product_id"),
+        ("behavior_info", "visit_id", "traffic_visit", "visit_id"),
+        ("ad_attribution", "order_id", "order_info", "order_id"),
+        ("ad_attribution", "ad_id", "ads_info", "ad_id"),
+    )
+    anomalies: dict[str, dict[str, int]] = {}
+    for child, child_field, parent, parent_field in rules:
+        if child not in cleaned or parent not in cleaned:
+            continue
+        child_frame = cleaned[child].frame
+        parent_frame = cleaned[parent].frame
+        if child_field not in child_frame or parent_field not in parent_frame:
+            continue
+        populated = child_frame[child_field].dropna()
+        missing = ~populated.isin(set(parent_frame[parent_field].dropna()))
+        if missing.any():
+            anomalies[f"{child}.{child_field}"] = {"missing_parent": int(missing.sum())}
+    return anomalies
 
 
 def _validate_mappings(mappings: dict[str, MappingResult]) -> None:

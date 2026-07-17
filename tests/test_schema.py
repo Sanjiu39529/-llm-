@@ -95,3 +95,10 @@ def test_schema_declares_money_and_time_field_types() -> None:
         definition = definition.split(") ENGINE=InnoDB", 1)[0]
         for field, field_type in fields.items():
             assert f"{field} {field_type}" in definition
+
+
+def test_schema_persists_age_outlier_and_failed_audit_fields() -> None:
+    sql = Path("sql/001_schema.sql").read_text(encoding="utf-8")
+    assert "age INT NULL" in sql
+    assert sql.count("is_outlier BOOLEAN NOT NULL DEFAULT FALSE") == 7
+    assert "error_code VARCHAR(64) NULL" in sql

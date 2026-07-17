@@ -25,6 +25,8 @@ class FileImportAdapter:
             return {target_table: pd.read_csv(path)}
 
         if suffix == ".xlsx":
+            if target_table is not None:
+                raise ValueError("--table 仅适用于 CSV；Excel 会导入所有已知工作表")
             workbook = pd.ExcelFile(path)
             known_sheets = [
                 sheet for sheet in workbook.sheet_names if sheet in STANDARD_TABLES

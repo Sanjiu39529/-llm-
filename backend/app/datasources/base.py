@@ -10,6 +10,16 @@ class FieldMapping:
     required_fields: frozenset[str]
     optional_fields: frozenset[str]
     aliases: dict[str, frozenset[str]]
+    generated_fields: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        declared = self.required_fields | self.optional_fields
+        if self.required_fields & self.optional_fields:
+            raise ValueError("required_fields and optional_fields must be disjoint")
+        if declared != set(self.aliases):
+            raise ValueError("required/optional fields must exactly match aliases")
+        if self.generated_fields & declared:
+            raise ValueError("generated fields cannot be source fields")
 
 
 STANDARD_TABLES: frozenset[str] = frozenset(
@@ -39,13 +49,14 @@ def _aliases(**fields: tuple[str, ...]) -> dict[str, frozenset[str]]:
 TABLE_CONTRACTS: dict[str, FieldMapping] = {
     "user_info": FieldMapping(
         required_fields=frozenset({"user_id"}),
-        optional_fields=frozenset({"user_name", "phone", "email", "register_time"}),
+        optional_fields=frozenset({"user_name", "phone", "email", "register_time", "age"}),
         aliases=_aliases(
             user_id=("用户id", "用户编号", "会员id", "member_id"),
             user_name=("用户名", "用户名称", "昵称", "姓名"),
             phone=("手机号", "手机号码", "电话"),
             email=("邮箱", "电子邮箱"),
             register_time=("注册时间", "注册日期"),
+            age=("年龄", "用户年龄"),
         ),
     ),
     "product_info": FieldMapping(
@@ -59,6 +70,7 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             price=("价格", "商品价格", "单价"),
             stock=("库存", "库存数量"),
         ),
+        generated_fields=frozenset({"is_outlier"}),
     ),
     "order_info": FieldMapping(
         required_fields=frozenset({"order_id", "user_id", "order_time"}),
@@ -71,6 +83,7 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             order_status=("订单状态", "状态"),
             order_amount=("订单金额", "订单总额", "总金额"),
         ),
+        generated_fields=frozenset({"is_outlier"}),
     ),
     "order_item": FieldMapping(
         required_fields=frozenset({"order_id", "product_id", "quantity"}),
@@ -82,6 +95,7 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             unit_price=("单价", "商品单价"),
             item_amount=("明细金额", "小计", "商品金额"),
         ),
+        generated_fields=frozenset({"is_outlier"}),
     ),
     "payment_info": FieldMapping(
         required_fields=frozenset({"order_id", "paid_at", "payment_amount"}),
@@ -94,6 +108,7 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             payment_method=("支付方式", "付款方式"),
             payment_status=("支付状态", "付款状态"),
         ),
+        generated_fields=frozenset({"is_outlier"}),
     ),
     "refund_info": FieldMapping(
         required_fields=frozenset({"order_id", "refund_amount", "refunded_at"}),
@@ -106,6 +121,7 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             refund_reason=("退款原因", "退货原因"),
             refund_status=("退款状态", "退货状态"),
         ),
+        generated_fields=frozenset({"is_outlier"}),
     ),
     "traffic_visit": FieldMapping(
         required_fields=frozenset({"visit_id", "visited_at"}),
@@ -142,6 +158,7 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             clicks=("点击量", "点击次数", "click"),
             cost=("花费", "广告花费", "消耗"),
         ),
+        generated_fields=frozenset({"is_outlier"}),
     ),
     "ad_attribution": FieldMapping(
         required_fields=frozenset({"order_id", "ad_id", "attributed_at"}),
@@ -153,5 +170,6 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             user_id=("用户id", "用户编号"),
             attribution_amount=("归因金额", "转化金额"),
         ),
+        generated_fields=frozenset({"is_outlier"}),
     ),
 }

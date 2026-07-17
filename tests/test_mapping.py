@@ -1,7 +1,7 @@
 """字段映射服务测试。"""
 
 import backend.app.services.mapping as mapping_module
-from backend.app.datasources.base import FieldMapping
+from backend.app.datasources.base import FieldMapping, TABLE_CONTRACTS
 from backend.app.services.mapping import suggest_mapping
 from pytest import MonkeyPatch
 
@@ -55,3 +55,17 @@ def test_suggest_mapping_keeps_ambiguous_columns_for_user_confirmation(
 
     assert result.mapping == {}
     assert result.ambiguous_columns == {"共享列": ["field_a", "field_b"]}
+
+
+def test_contract_fields_aliases_and_generated_fields_cannot_drift() -> None:
+    for contract in TABLE_CONTRACTS.values():
+        assert contract.required_fields.isdisjoint(contract.optional_fields)
+        assert contract.required_fields | contract.optional_fields == set(contract.aliases)
+        assert contract.generated_fields.isdisjoint(contract.aliases)
+
+    assert "age" in TABLE_CONTRACTS["user_info"].optional_fields
+    for table_name in (
+        "product_info", "order_info", "order_item", "payment_info",
+        "refund_info", "ads_info", "ad_attribution",
+    ):
+        assert TABLE_CONTRACTS[table_name].generated_fields == frozenset({"is_outlier"})

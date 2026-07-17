@@ -1,6 +1,7 @@
 """确定性数据清洗服务测试。"""
 
 import pandas as pd
+from decimal import Decimal
 
 from backend.app.services.cleaning import clean_frame
 
@@ -160,3 +161,69 @@ def test_clean_order_items_marks_outlier_from_each_amount_column() -> None:
     result = clean_frame("order_item", frame)
 
     assert result.frame["is_outlier"].tolist() == [False, False, False, True, True]
+
+
+def test_ads_and_attribution_deduplicate_with_ddl_keys() -> None:
+    ads = clean_frame("ads_info", pd.DataFrame({
+        "ad_id": ["a", "a", "a"],
+        "ad_date": ["2026-01-01", "2026-01-02", "2026-01-01"],
+    }))
+    attribution = clean_frame("ad_attribution", pd.DataFrame({
+        "order_id": ["o", "o", "o"], "ad_id": ["a", "a", "a"],
+        "attributed_at": ["2026-01-01", "2026-01-02", "2026-01-01"],
+    }))
+    assert len(ads.frame) == 2 and ads.summary.deduplicated == 1
+    assert len(attribution.frame) == 2 and attribution.summary.deduplicated == 1
+
+
+def test_required_values_types_and_ranges_are_skipped_with_reason_audit() -> None:
+    result = clean_frame("order_item", pd.DataFrame({
+        "order_id": ["ok", "", "bad-quantity", "fraction"],
+        "product_id": ["p1", "p2", "p3", "p4"],
+        "quantity": [1, 1, "nope", 1.5],
+        "unit_price": ["12.345", "10", "10", "10"],
+    }))
+    assert result.frame["order_id"].tolist() == ["ok"]
+    assert result.frame.iloc[0]["unit_price"] == Decimal("12.35")
+    assert result.summary.reasons["order_id"]["required_blank"] == 1
+    assert result.summary.reasons["quantity"]["invalid_integer"] == 2
+    assert result.summary.skipped == 3
+
+
+def test_invalid_and_overflow_money_are_skipped_before_database_write() -> None:
+    result = clean_frame("payment_info", pd.DataFrame({
+        "order_id": ["a", "b", "c"],
+        "paid_at": ["2026-01-01"] * 3,
+        "payment_amount": ["not-money", "10000000000000000", "0.105"],
+    }))
+    assert result.frame["payment_amount"].tolist() == [Decimal("0.11")]
+    assert result.summary.reasons["payment_amount"]["invalid_decimal"] == 1
+    assert result.summary.reasons["payment_amount"]["decimal_out_of_range"] == 1
+
+
+def test_only_order_time_rejects_future_dates() -> None:
+    user = clean_frame("user_info", pd.DataFrame({"user_id": ["u"], "register_time": ["2099-01-01"]}))
+    order = clean_frame("order_info", pd.DataFrame({"order_id": ["o"], "user_id": ["u"], "order_time": ["2099-01-01"]}))
+    assert len(user.frame) == 1
+    assert order.frame.empty
+    assert order.summary.reasons["order_time"]["future_order_time"] == 1
+
+
+def test_string_and_integer_storage_bounds_are_validated() -> None:
+    users = clean_frame("user_info", pd.DataFrame({"user_id": ["u", "x" * 65]}))
+    ads = clean_frame("ads_info", pd.DataFrame({
+        "ad_id": ["a", "b"], "ad_date": ["2026-01-01"] * 2,
+        "impressions": [10, 9223372036854775808],
+    }))
+    assert users.frame["user_id"].tolist() == ["u"]
+    assert users.summary.reasons["user_id"]["text_too_long"] == 1
+    assert ads.frame["ad_id"].tolist() == ["a"]
+    assert ads.summary.reasons["impressions"]["integer_out_of_range"] == 1
+
+
+def test_age_mean_is_stored_as_an_integer() -> None:
+    result = clean_frame("user_info", pd.DataFrame({
+        "user_id": ["a", "b", "c"], "age": [20, 21, None],
+    }))
+    assert result.frame["age"].tolist() == [20, 21, 21]
+    assert all(isinstance(value, int) for value in result.frame["age"])
