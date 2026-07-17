@@ -10,7 +10,6 @@ from backend.app.database.repository import ImportRepository
 from backend.app.datasources.base import STANDARD_TABLES
 from backend.app.datasources.file_import import FileImportAdapter
 from backend.app.services.import_service import ImportReport, ImportService
-from backend.app.services.mapping import MappingResult
 
 
 def test_csv_requires_target_table_and_returns_one_frame(tmp_path: Path) -> None:
@@ -113,29 +112,26 @@ def test_import_service_rejects_unmapped_required_fields_before_writes(
 
 
 def test_import_service_rejects_ambiguous_columns_before_writes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
-    from backend.app.services import import_service
-
     engine = create_engine("sqlite:///:memory:")
     _create_import_tables(
         engine,
         "CREATE TABLE user_info (user_id TEXT, import_batch_id INTEGER)",
     )
     path = tmp_path / "users.csv"
-    path.write_text("用户ID\nu1\n", encoding="utf-8")
-    monkeypatch.setattr(
-        import_service,
-        "suggest_mapping",
-        lambda table_name, columns: MappingResult(
-            mapping={},
-            unmapped_required=[],
-            ambiguous_columns={"用户ID": ["user_id", "other_id"]},
-        ),
+    path.write_text(
+        "用户ID,用户编号\n"
+        "u1,u1-alias\n",
+        encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="ambiguous_columns.*用户ID"):
+    with pytest.raises(ValueError) as exc_info:
         ImportService(engine).import_file(path, target_table="user_info")
+    assert str(exc_info.value) == (
+        "自动字段映射无法确认: user_info: "
+        "ambiguous_columns={'用户ID': ['user_id'], '用户编号': ['user_id']}"
+    )
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT COUNT(*) FROM import_batch")) == 0

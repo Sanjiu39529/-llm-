@@ -95,9 +95,24 @@ def _validate_mappings(mappings: dict[str, MappingResult]) -> None:
             errors.append(
                 f"{table_name}: unmapped_required={result.unmapped_required}"
             )
-        if result.ambiguous_columns:
+        ambiguous_columns = {
+            source: list(targets)
+            for source, targets in result.ambiguous_columns.items()
+        }
+        sources_by_target: dict[str, list[str]] = {}
+        for source, target in result.mapping.items():
+            sources_by_target.setdefault(target, []).append(source)
+        for target, sources in sources_by_target.items():
+            if len(sources) > 1:
+                for source in sources:
+                    ambiguous_columns.setdefault(source, []).append(target)
+        if ambiguous_columns:
+            ambiguous_columns = {
+                source: sorted(set(ambiguous_columns[source]))
+                for source in sorted(ambiguous_columns)
+            }
             errors.append(
-                f"{table_name}: ambiguous_columns={result.ambiguous_columns}"
+                f"{table_name}: ambiguous_columns={ambiguous_columns}"
             )
     if errors:
         raise ValueError("自动字段映射无法确认: " + "; ".join(errors))
