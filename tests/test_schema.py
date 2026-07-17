@@ -49,3 +49,49 @@ def test_schema_enforces_audit_type_and_index_invariants() -> None:
         assert fragment in sql
 
     assert sql.count("DEFAULT CHARSET=utf8mb4") == 12
+
+
+def test_schema_declares_money_and_time_field_types() -> None:
+    """金额与业务时间字段应逐项使用约定的存储类型。"""
+    sql = Path("sql/001_schema.sql").read_text(encoding="utf-8")
+    field_types = {
+        "import_batch": {
+            "created_at": "DATETIME",
+            "completed_at": "DATETIME",
+        },
+        "metric_config": {"updated_at": "DATETIME"},
+        "user_info": {"register_time": "DATETIME"},
+        "product_info": {"price": "DECIMAL(18,2)"},
+        "order_info": {
+            "order_time": "DATETIME",
+            "order_amount": "DECIMAL(18,2)",
+        },
+        "order_item": {
+            "unit_price": "DECIMAL(18,2)",
+            "item_amount": "DECIMAL(18,2)",
+        },
+        "payment_info": {
+            "paid_at": "DATETIME",
+            "payment_amount": "DECIMAL(18,2)",
+        },
+        "refund_info": {
+            "refund_amount": "DECIMAL(18,2)",
+            "refunded_at": "DATETIME",
+        },
+        "traffic_visit": {"visited_at": "DATETIME"},
+        "behavior_info": {"occurred_at": "DATETIME"},
+        "ads_info": {
+            "ad_date": "DATETIME",
+            "cost": "DECIMAL(18,2)",
+        },
+        "ad_attribution": {
+            "attributed_at": "DATETIME",
+            "attribution_amount": "DECIMAL(18,2)",
+        },
+    }
+
+    for table, fields in field_types.items():
+        definition = sql.split(f"CREATE TABLE IF NOT EXISTS {table} (", 1)[1]
+        definition = definition.split(") ENGINE=InnoDB", 1)[0]
+        for field, field_type in fields.items():
+            assert f"{field} {field_type}" in definition
