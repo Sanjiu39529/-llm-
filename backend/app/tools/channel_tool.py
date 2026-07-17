@@ -128,19 +128,22 @@ def _seven_day_amount(
 ) -> Decimal:
     windows: dict[object, list[object]] = {}
     for ad_id, group in ads.dropna(subset=["ad_id"]).groupby("ad_id", sort=False):
-        windows[ad_id] = list(group["ad_date"])
+        windows[ad_id] = [pd.Timestamp(value).normalize() for value in group["ad_date"]]
+    rows = attributions.reset_index(drop=True)
     included = []
     window = timedelta(days=lookback_days + 1)
-    for index, row in attributions.iterrows():
+    for _, row in rows.iterrows():
         attributed_at = row["attributed_at"]
         if pd.isna(attributed_at):
+            included.append(False)
             continue
-        if any(
-            ad_date <= attributed_at < ad_date + window
-            for ad_date in windows.get(row["ad_id"], ())
-        ):
-            included.append(index)
-    return _sum_decimal(attributions.loc[included, "attribution_amount"])
+        included.append(
+            any(
+                day_start <= attributed_at < day_start + window
+                for day_start in windows.get(row["ad_id"], ())
+            )
+        )
+    return _sum_decimal(rows.loc[included, "attribution_amount"])
 
 
 def _channel_results(
@@ -148,34 +151,62 @@ def _channel_results(
 ) -> tuple[dict[str, dict[str, object]], list[str]]:
     if reason is not None:
         return {
-            channel: {
-                "cost": None, "impressions": None, "clicks": None,
-                "available": False, "reason": reason,
-            }
+            channel: _unavailable_channel(reason)
             for channel in _CHANNELS
         }, []
+    if "channel" not in ads.columns:
+        return {
+            channel: _unavailable_channel("missing_channel")
+            for channel in _CHANNELS
+        }, ["<missing>"]
     result = {}
     for channel in _CHANNELS:
-        rows = (
-            ads.loc[ads["channel"].map(_normalize).eq(channel)]
-            if "channel" in ads.columns
-            else ads.iloc[0:0]
+        rows = ads.loc[ads["channel"].map(_normalize).eq(channel)]
+        field_reasons = {
+            field: _missing(ads, field)
+            for field in ("cost", "impressions", "clicks")
+        }
+        channel_reason = next(
+            (field_reason for field_reason in field_reasons.values() if field_reason),
+            None,
         )
         result[channel] = {
-            "cost": quantize_money(_sum_decimal(rows["cost"])) if "cost" in rows else None,
-            "impressions": _sum_decimal(rows["impressions"]) if "impressions" in rows else None,
-            "clicks": _sum_decimal(rows["clicks"]) if "clicks" in rows else None,
-            "available": True,
-            "reason": None,
+            "cost": _channel_metric("cost", rows, field_reasons["cost"], money=True),
+            "impressions": _channel_metric(
+                "impressions", rows, field_reasons["impressions"]
+            ),
+            "clicks": _channel_metric("clicks", rows, field_reasons["clicks"]),
+            "available": channel_reason is None,
+            "reason": channel_reason,
         }
-    if "channel" not in ads.columns:
-        return result, ["<missing>"]
     unknown = {
         _normalize(value) or "<missing>"
         for value in ads["channel"]
         if _normalize(value) not in _CHANNELS
     }
     return result, sorted(unknown)
+
+
+def _unavailable_channel(reason: str) -> dict[str, object]:
+    return {
+        field: MetricResult(field, None, False, reason)
+        for field in ("cost", "impressions", "clicks")
+    } | {"available": False, "reason": reason}
+
+
+def _channel_metric(
+    name: str,
+    rows: pd.DataFrame,
+    reason: str | None,
+    *,
+    money: bool = False,
+) -> MetricResult:
+    if reason is not None:
+        return MetricResult(name, None, False, reason)
+    value = _sum_decimal(rows[name])
+    if money:
+        value = quantize_money(value)
+    return MetricResult(name, value, True, None)
 
 
 def _normalize(value: object) -> str:
