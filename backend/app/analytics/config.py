@@ -31,7 +31,10 @@ class MetricConfig:
             "statistics_days",
             "customer_history_days",
         ):
-            if getattr(self, field_name) <= 0:
+            value = getattr(self, field_name)
+            if type(value) is not int:
+                raise ValueError(f"{field_name} must be a positive integer")
+            if value <= 0:
                 raise ValueError(f"{field_name} must be positive")
 
     @classmethod

@@ -142,3 +142,22 @@ def test_metric_config_rejects_invalid_boundaries(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         MetricConfig.from_mapping(values)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        (field_name, invalid_value)
+        for field_name in (
+            "roi_lookback_days",
+            "statistics_days",
+            "customer_history_days",
+        )
+        for invalid_value in (1.5, Decimal("1.5"), True)
+    ],
+)
+def test_metric_config_constructor_requires_positive_integer_day_windows(
+    field_name: str, invalid_value: object
+) -> None:
+    with pytest.raises(ValueError, match=f"{field_name} must be a positive integer"):
+        MetricConfig(**{field_name: invalid_value})
