@@ -11,17 +11,19 @@ from backend.app.datasources.base import TABLE_CONTRACTS
 
 logger = logging.getLogger(__name__)
 
-_PRIMARY_KEYS = {
-    "user_info": "user_id",
-    "product_info": "product_id",
-    "order_info": "order_id",
-    "order_item": "order_id",
-    "payment_info": "payment_id",
-    "refund_info": "refund_id",
-    "traffic_visit": "visit_id",
-    "behavior_info": "event_id",
-    "ads_info": "ad_id",
-    "ad_attribution": "order_id",
+_BUSINESS_KEYS = {
+    "user_info": ("user_id",),
+    "product_info": ("product_id",),
+    "order_info": ("order_id",),
+    "order_item": ("order_id", "product_id"),
+    "traffic_visit": ("visit_id",),
+    "behavior_info": ("event_id",),
+    "ads_info": ("ad_id",),
+    "ad_attribution": ("order_id", "ad_id"),
+}
+_OPTIONAL_ID_KEYS = {
+    "payment_info": ("payment_id", ("order_id", "paid_at", "payment_amount")),
+    "refund_info": ("refund_id", ("order_id", "refunded_at", "refund_amount")),
 }
 _DATE_COLUMNS = frozenset(
     {
@@ -150,10 +152,31 @@ def _mark_outliers(frame: pd.DataFrame) -> None:
     if not amount_columns:
         return
 
-    column = sorted(amount_columns)[0]
-    amounts = frame[column]
-    q1, q3 = amounts.quantile([0.25, 0.75])
-    frame["is_outlier"] = amounts.gt(q3 + 3 * (q3 - q1)).fillna(False)
+    outliers = pd.Series(False, index=frame.index)
+    for column in amount_columns:
+        amounts = frame[column]
+        q1, q3 = amounts.quantile([0.25, 0.75])
+        outliers |= amounts.gt(q3 + 3 * (q3 - q1)).fillna(False)
+    frame["is_outlier"] = outliers
+
+
+def _deduplicate(frame: pd.DataFrame, table_name: str) -> pd.Series:
+    """返回业务键重复记录掩码，支付和退款缺少 ID 时使用必填自然键。"""
+    if table_name in _OPTIONAL_ID_KEYS:
+        id_column, fallback_columns = _OPTIONAL_ID_KEYS[table_name]
+        if id_column in frame:
+            has_id = frame[id_column].notna() & frame[id_column].astype(str).str.strip().ne("")
+            fallback_keys = frame.loc[:, list(fallback_columns)].apply(tuple, axis=1)
+            keys = fallback_keys.map(lambda value: ("fallback", *value))
+            keys.loc[has_id] = frame.loc[has_id, id_column].map(lambda value: ("id", value))
+            return keys.duplicated(keep="first")
+        keys = list(fallback_columns)
+    else:
+        keys = list(_BUSINESS_KEYS[table_name])
+
+    if not set(keys).issubset(frame.columns):
+        return pd.Series(False, index=frame.index)
+    return frame.duplicated(subset=keys, keep="first")
 
 
 def clean_frame(table_name: str, frame: pd.DataFrame) -> CleanResult:
@@ -167,11 +190,9 @@ def clean_frame(table_name: str, frame: pd.DataFrame) -> CleanResult:
 
     cleaned = frame.copy()
     summary = CleanSummary()
-    primary_key = _PRIMARY_KEYS[table_name]
-    if primary_key in cleaned:
-        duplicate = cleaned.duplicated(subset=[primary_key], keep="first")
-        summary.deduplicated = int(duplicate.sum())
-        cleaned = cleaned.loc[~duplicate].copy()
+    duplicate = _deduplicate(cleaned, table_name)
+    summary.deduplicated = int(duplicate.sum())
+    cleaned = cleaned.loc[~duplicate].copy()
 
     cleaned = _drop_invalid_dates(cleaned, summary)
     cleaned = _drop_non_positive_amounts(cleaned, summary)
