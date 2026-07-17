@@ -14,7 +14,7 @@ CSV 文件还需用 `--table` 指定标准表，例如 `--table user_info`。
 
 ## 数据库初始化
 
-全新数据库只执行最新版 `sql/001_schema.sql`。旧版 Phase 1 数据库先备份并清理支付/退款重复业务键，再一次性执行 `sql/002_phase1_integrity_upgrade.sql`；不要对全新数据库重复执行升级脚本。
+全新数据库只执行最新版 `sql/001_schema.sql`。旧版 Phase 1 数据库先备份并清理支付/退款的重复 ID 与重复自然键，再一次性执行 `sql/002_phase1_integrity_upgrade.sql`；不要对全新数据库重复执行升级脚本。
 
 ## Phase 1 状态
 

@@ -208,8 +208,9 @@ def _key_rows(table_name: str, frame: pd.DataFrame) -> list[tuple[tuple[str, ...
         )
         for _, row in frame.iterrows():
             has_id = id_column in frame and not pd.isna(row[id_column]) and str(row[id_column]).strip()
-            columns = (id_column,) if has_id else fallback
-            rows.append((columns, tuple(row[column] for column in columns)))
+            if has_id:
+                rows.append(((id_column,), (row[id_column],)))
+            rows.append((fallback, tuple(row[column] for column in fallback)))
         return rows
     columns = _BUSINESS_KEYS[table_name]
     return [(columns, tuple(row[column] for column in columns)) for _, row in frame.iterrows()]

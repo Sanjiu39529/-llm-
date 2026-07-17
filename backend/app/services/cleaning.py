@@ -285,13 +285,26 @@ def _deduplicate(frame: pd.DataFrame, table_name: str) -> pd.Series:
     """返回业务键重复记录掩码，支付和退款缺少 ID 时使用必填自然键。"""
     if table_name in _OPTIONAL_ID_KEYS:
         id_column, fallback_columns = _OPTIONAL_ID_KEYS[table_name]
-        if id_column in frame:
-            has_id = frame[id_column].notna() & frame[id_column].astype(str).str.strip().ne("")
-            fallback_keys = frame.loc[:, list(fallback_columns)].apply(tuple, axis=1)
-            keys = fallback_keys.map(lambda value: ("fallback", *value))
-            keys.loc[has_id] = frame.loc[has_id, id_column].map(lambda value: ("id", value))
-            return keys.duplicated(keep="first")
-        keys = list(fallback_columns)
+        seen_ids: set[object] = set()
+        seen_natural_keys: set[tuple[object, ...]] = set()
+        duplicate = pd.Series(False, index=frame.index)
+        for index, row in frame.iterrows():
+            natural_key = tuple(row[column] for column in fallback_columns)
+            has_id = (
+                id_column in frame
+                and pd.notna(row[id_column])
+                and bool(str(row[id_column]).strip())
+            )
+            identifier = row[id_column] if has_id else None
+            if natural_key in seen_natural_keys or (
+                has_id and identifier in seen_ids
+            ):
+                duplicate.loc[index] = True
+                continue
+            seen_natural_keys.add(natural_key)
+            if has_id:
+                seen_ids.add(identifier)
+        return duplicate
     else:
         keys = list(_BUSINESS_KEYS[table_name])
 

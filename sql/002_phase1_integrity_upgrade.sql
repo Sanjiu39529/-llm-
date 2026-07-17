@@ -1,5 +1,5 @@
 -- 仅用于从早期 Phase 1 版本的 001_schema.sql 一次性升级。
--- 执行前应先备份，并清理 payment/refund 完整业务键重复数据。
+-- 执行前应先备份，并同时清理 payment/refund 的重复 ID 与重复自然键数据。
 
 ALTER TABLE import_batch
     ADD COLUMN error_code VARCHAR(64) NULL AFTER quality_summary;

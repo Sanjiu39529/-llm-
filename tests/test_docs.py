@@ -130,3 +130,4 @@ def test_docs_distinguish_fresh_schema_upgrade_and_memory_boundary() -> None:
     assert "整表加载到内存" in guide
     assert "文本单元格" in guide and "数值单元格" in guide
     assert "前导零" in guide
+    assert "重复 ID" in guide and "重复自然键" in guide

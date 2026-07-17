@@ -536,3 +536,82 @@ def test_duplicate_check_uses_one_set_query_per_key_shape() -> None:
         )
     assert count == 1
     assert len(selects) == 1
+
+
+@pytest.mark.parametrize("file_type", ["csv", "xlsx"])
+def test_file_import_preserves_default_na_tokens_and_skips_true_blank(
+    tmp_path: Path, file_type: str
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_import_tables(
+        engine,
+        "CREATE TABLE user_info (user_id TEXT PRIMARY KEY, user_name TEXT, import_batch_id INTEGER NOT NULL)",
+    )
+    rows = pd.DataFrame({
+        "user_id": ["NA", "N/A", "NULL", "null", None],
+        "user_name": ["a", "b", "c", "d", "true blank"],
+    })
+    if file_type == "csv":
+        path = tmp_path / "users.csv"
+        rows.to_csv(path, index=False)
+        report = ImportService(engine).import_file(path, target_table="user_info")
+    else:
+        path = tmp_path / "users.xlsx"
+        with pd.ExcelWriter(path) as writer:
+            rows.to_excel(writer, sheet_name="user_info", index=False)
+        report = ImportService(engine).import_file(path)
+
+    assert report.written_rows == 4
+    assert report.skipped_rows == 1
+    with engine.connect() as connection:
+        assert connection.scalars(text("SELECT user_id FROM user_info ORDER BY rowid")).all() == [
+            "NA", "N/A", "NULL", "null"
+        ]
+
+
+@pytest.mark.parametrize(
+    ("table_name", "id_column", "time_column", "amount_column"),
+    [
+        ("payment_info", "payment_id", "paid_at", "payment_amount"),
+        ("refund_info", "refund_id", "refunded_at", "refund_amount"),
+    ],
+)
+def test_cross_batch_rejects_id_or_natural_key_conflict(
+    tmp_path: Path,
+    table_name: str,
+    id_column: str,
+    time_column: str,
+    amount_column: str,
+) -> None:
+    for conflict in ("id", "natural"):
+        engine = create_engine("sqlite:///:memory:")
+        _create_import_tables(engine, f"""
+            CREATE TABLE {table_name} (
+                {id_column} TEXT, order_id TEXT, {time_column} DATETIME,
+                {amount_column} TEXT, is_outlier BOOLEAN, import_batch_id INTEGER
+            )
+        """)
+        with engine.begin() as connection:
+            connection.execute(text("CREATE TABLE order_info (order_id TEXT PRIMARY KEY)"))
+            connection.execute(text("INSERT INTO order_info VALUES ('old-order'), ('new-order')"))
+            connection.execute(
+                text(f"""INSERT INTO {table_name}
+                    ({id_column}, order_id, {time_column}, {amount_column}, is_outlier, import_batch_id)
+                    VALUES ('existing-id', 'old-order', '2026-01-01 00:00:00', '10.00', 0, 99)
+                """)
+            )
+        path = tmp_path / f"{table_name}-{conflict}.csv"
+        incoming_id = "existing-id" if conflict == "id" else "different-id"
+        incoming_order = "new-order" if conflict == "id" else "old-order"
+        incoming_date = "2026-01-02" if conflict == "id" else "2026-01-01"
+        incoming_amount = "11.00" if conflict == "id" else "10.00"
+        path.write_text(
+            f"{id_column},order_id,{time_column},{amount_column}\n"
+            f"{incoming_id},{incoming_order},{incoming_date},{incoming_amount}\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(CrossBatchDuplicateError, match=f"cross_batch_duplicate.*{table_name}"):
+            ImportService(engine).import_file(path, target_table=table_name)
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT error_code FROM import_batch")) == "cross_batch_duplicate"

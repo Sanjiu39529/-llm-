@@ -22,7 +22,11 @@ class FileImportAdapter:
                 raise ValueError(f"CSV 必须指定 target_table，可选表名: {choices}")
             if target_table not in STANDARD_TABLES:
                 raise ValueError(f"不支持的标准表: {target_table}")
-            return {target_table: pd.read_csv(path, dtype=object)}
+            return {
+                target_table: pd.read_csv(
+                    path, dtype=object, keep_default_na=False
+                )
+            }
 
         if suffix == ".xlsx":
             if target_table is not None:
@@ -31,6 +35,11 @@ class FileImportAdapter:
             known_sheets = [
                 sheet for sheet in workbook.sheet_names if sheet in STANDARD_TABLES
             ]
-            return pd.read_excel(workbook, sheet_name=known_sheets, dtype=object)
+            return pd.read_excel(
+                workbook,
+                sheet_name=known_sheets,
+                dtype=object,
+                keep_default_na=False,
+            )
 
         raise ValueError(f"不支持的文件类型: {suffix or '<无扩展名>'}")

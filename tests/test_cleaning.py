@@ -1,6 +1,7 @@
 """确定性数据清洗服务测试。"""
 
 import pandas as pd
+import pytest
 from decimal import Decimal
 
 from backend.app.services.cleaning import clean_frame
@@ -236,3 +237,24 @@ def test_fractional_age_is_invalid_then_filled_without_truncation() -> None:
     assert result.frame["age"].tolist() == [20, 21, 21, 21]
     assert result.summary.reasons["age"]["invalid_integer"] == 1
     assert result.summary.filled["age"] == 2
+
+
+@pytest.mark.parametrize(
+    ("table_name", "id_column", "time_column", "amount_column"),
+    [
+        ("payment_info", "payment_id", "paid_at", "payment_amount"),
+        ("refund_info", "refund_id", "refunded_at", "refund_amount"),
+    ],
+)
+def test_payment_and_refund_deduplicate_on_id_or_natural_key(
+    table_name: str, id_column: str, time_column: str, amount_column: str
+) -> None:
+    frame = pd.DataFrame({
+        id_column: ["id-1", "id-2", "id-1", "id-3"],
+        "order_id": ["o1", "o1", "o2", "o3"],
+        time_column: ["2026-01-01", "2026-01-01", "2026-01-02", "2026-01-03"],
+        amount_column: ["10", "10", "20", "30"],
+    })
+    result = clean_frame(table_name, frame)
+    assert result.frame[id_column].tolist() == ["id-1", "id-3"]
+    assert result.summary.deduplicated == 2
