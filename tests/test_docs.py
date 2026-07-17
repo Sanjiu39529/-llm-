@@ -79,19 +79,42 @@ def test_phase_one_guide_documents_quality_summary_boundaries() -> None:
 def test_phase_one_guide_matches_current_deduplication_age_and_mapping_behavior() -> None:
     guide = GUIDE_PATH.read_text(encoding="utf-8")
 
-    deduplication = _line_containing(guide, "当前去重")
-    assert "只按业务键" in deduplication
+    deduplication = _line_containing(guide, "当前批内去重")
+    assert "完整业务键" in deduplication
     assert "保留首条" in deduplication
-    assert "不比较或记录同键内容冲突" in deduplication
+    assert "不比较同键内容冲突" in deduplication
     assert "deduplicated" in deduplication
 
     no_valid_age = _line_containing(guide, "全批次无有效年龄")
     assert "保持为空" in no_valid_age
     assert 'filled["age"] = 0' in no_valid_age
-    assert "纯缺失或不可解析不会增加" in no_valid_age
-    assert "越界仍会增加" in no_valid_age
+    assert "纯缺失不增加" in no_valid_age
+    assert "不可解析和越界值都会按原因增加" in no_valid_age
     assert "`invalid`" in no_valid_age
 
     ambiguity = _line_containing(guide, "人工确认与映射模板保存")
     assert "都属于后续 Streamlit" in ambiguity
     assert "当前 CLI 只拒绝歧义" in ambiguity
+
+
+def test_guide_separates_future_goal_from_phase_one_and_matches_audit_contract() -> None:
+    guide = GUIDE_PATH.read_text(encoding="utf-8")
+    introduction = _line_containing(guide, "项目最终目标")
+    assert "当前仅完成 Phase 1" in introduction
+    assert "我开发了一个基于 LLM Agent" not in guide
+    for token in (
+        "unmapped_source_columns", "relationship_anomalies", "error_code",
+        "cross_batch_duplicate", "reasons", "IMPORT_BATCH_SIZE",
+    ):
+        assert token in guide
+    assert "支付金额、优惠券、满减和运费" not in guide
+    assert "退款状态、退货数量" not in guide
+    assert "访客、设备、访问时间" not in guide
+
+
+def test_guide_documents_excel_table_rejection_and_decimal_policy() -> None:
+    guide = GUIDE_PATH.read_text(encoding="utf-8")
+    assert "Excel 不接受 `--table`" in guide
+    assert "ROUND_HALF_UP" in guide
+    assert "9999999999999999.99" in guide
+    assert "只有 `order_time`" in guide

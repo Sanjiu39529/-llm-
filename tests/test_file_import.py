@@ -282,7 +282,9 @@ def test_cli_outputs_json_error_and_exit_code_one(
     exit_code = import_data.main(["--file", "bad.csv", "--table", "user_info"])
 
     assert exit_code == 1
-    assert capsys.readouterr().out.strip() == '{"error": "bad file"}'
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {"error_code": "invalid_input", "error": "bad file"}
 
 
 def test_cli_argument_error_outputs_json_and_exit_code_one(capsys: object) -> None:
@@ -291,7 +293,30 @@ def test_cli_argument_error_outputs_json_and_exit_code_one(capsys: object) -> No
     exit_code = import_data.main([])
 
     assert exit_code == 1
-    assert "error" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err)["error_code"] == "invalid_input"
+
+
+def test_cli_redacts_internal_error_details(
+    monkeypatch: pytest.MonkeyPatch, capsys: object
+) -> None:
+    from backend.scripts import import_data
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setattr(
+        import_data.ImportService,
+        "import_file",
+        lambda self, path, target_table=None: (_ for _ in ()).throw(
+            RuntimeError("mysql://admin:secret@private-host/db")
+        ),
+    )
+    assert import_data.main(["--file", "users.csv", "--table", "user_info"]) == 1
+    captured = capsys.readouterr()
+    assert "secret" not in captured.err
+    assert json.loads(captured.err) == {
+        "error_code": "internal_error", "error": "导入失败"
+    }
 
 
 def test_quality_summary_persists_missing_unmapped_reasons_and_relationships(tmp_path: Path) -> None:

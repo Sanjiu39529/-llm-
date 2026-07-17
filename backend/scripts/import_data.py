@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import logging
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
@@ -10,6 +12,9 @@ from sqlalchemy import create_engine
 
 from backend.app.config import Settings
 from backend.app.services.import_service import ImportService
+
+
+logger = logging.getLogger(__name__)
 
 
 class _JsonArgumentParser(argparse.ArgumentParser):
@@ -35,8 +40,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(asdict(report), ensure_ascii=False))
         return 0
+    except ValueError as exc:
+        print(
+            json.dumps(
+                {"error_code": "invalid_input", "error": str(exc)},
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    except OSError:
+        print(
+            json.dumps(
+                {"error_code": "file_error", "error": "无法读取导入文件"},
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        return 1
     except Exception as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        logger.error("导入失败，异常类型=%s", type(exc).__name__)
+        print(
+            json.dumps(
+                {"error_code": "internal_error", "error": "导入失败"},
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
         return 1
 
 
