@@ -282,10 +282,120 @@ def test_mixed_known_and_unknown_payment_statuses_warn_and_use_known_rows() -> N
 
     assert metrics["payment_conversion"].value == Decimal("0.5000")
     assert metrics["overall_conversion"].value == Decimal("0.5000")
-    assert metrics["quality_warnings"]["unknown_payment_statuses"] == {
+    assert metrics["quality_warnings"]["unknown_payment_statuses"]["period"] == {
         "count": 1,
         "values": ["mystery"],
     }
+
+
+@pytest.mark.parametrize(
+    ("history_statuses", "reason", "warning_values"),
+    [
+        ([None, "  "], "empty_history_payment_status", ["<missing>"]),
+        (
+            ["historical-mystery", "???"],
+            "unknown_history_payment_status",
+            ["???", "historical-mystery"],
+        ),
+    ],
+)
+def test_all_unusable_history_statuses_disable_customer_metrics(
+    history_statuses: list[object], reason: str, warning_values: list[str]
+) -> None:
+    tables = _empty_tables()
+    tables["order_info"] = _frame(
+        order_id=["history-one", "history-two", "current"],
+        user_id=["buyer", "buyer", "buyer"],
+        order_time=[START - timedelta(days=2), START - timedelta(days=1), START],
+    )
+    tables["payment_info"] = _frame(
+        order_id=["history-one", "history-two", "current"],
+        paid_at=[START - timedelta(days=2), START - timedelta(days=1), START],
+        payment_status=[*history_statuses, "success"],
+    )
+
+    metrics = calculate_user_metrics(tables, START, END)
+
+    assert metrics["payment_conversion"].value == Decimal("1.0000")
+    for name in ("repeat_rate", "new_customer_share"):
+        assert metrics[name].available is False
+        assert metrics[name].reason == reason
+    assert metrics["quality_warnings"]["unknown_payment_statuses"]["history"] == {
+        "count": 2,
+        "values": warning_values,
+    }
+
+
+def test_mixed_history_statuses_exclude_uncertain_users_from_new_customers() -> None:
+    tables = _empty_tables()
+    tables["order_info"] = _frame(
+        order_id=[
+            "known-old",
+            "uncertain-history",
+            "known-failed",
+            "current-old",
+            "current-uncertain",
+            "current-new",
+        ],
+        user_id=["old", "uncertain", "new", "old", "uncertain", "new"],
+        order_time=[
+            START - timedelta(days=3),
+            START - timedelta(days=2),
+            START - timedelta(days=1),
+            START,
+            START,
+            START,
+        ],
+    )
+    tables["payment_info"] = _frame(
+        order_id=[
+            "known-old",
+            "uncertain-history",
+            "known-failed",
+            "current-old",
+            "current-uncertain",
+            "current-new",
+        ],
+        paid_at=[
+            START - timedelta(days=3),
+            START - timedelta(days=2),
+            START - timedelta(days=1),
+            START,
+            START,
+            START,
+        ],
+        payment_status=["success", "mystery", "failed", "paid", "paid", "paid"],
+    )
+
+    metrics = calculate_user_metrics(tables, START, END)
+
+    assert metrics["repeat_rate"].value == Decimal("0.3333")
+    assert metrics["new_customer_share"].value == Decimal("0.3333")
+    assert metrics["quality_warnings"]["unknown_payment_statuses"]["history"] == {
+        "count": 1,
+        "values": ["mystery"],
+    }
+
+
+def test_normal_period_status_does_not_hide_unusable_history_status() -> None:
+    tables = _empty_tables()
+    tables["order_info"] = _frame(
+        order_id=["history", "current"],
+        user_id=["buyer", "buyer"],
+        order_time=[START - timedelta(days=1), START],
+    )
+    tables["payment_info"] = _frame(
+        order_id=["history", "current"],
+        paid_at=[START - timedelta(days=1), START],
+        payment_status=["unmapped", "已支付"],
+    )
+
+    metrics = calculate_user_metrics(tables, START, END)
+
+    assert metrics["payment_conversion"].available is True
+    assert metrics["overall_conversion"].reason == "zero_denominator"
+    assert metrics["repeat_rate"].reason == "unknown_history_payment_status"
+    assert metrics["new_customer_share"].reason == "unknown_history_payment_status"
 
 
 def test_missing_traffic_only_disables_traffic_dependent_metrics() -> None:

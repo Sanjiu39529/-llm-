@@ -77,7 +77,7 @@ def calculate_user_metrics(
         len(traffic_keys.dropna().unique()),
         traffic_reason,
     )
-    repeat_rate, new_customer_share = _customer_results(
+    repeat_rate, new_customer_share, history_payment_warning = _customer_results(
         tables.get("order_info"),
         tables.get("payment_info"),
         payment_users,
@@ -88,8 +88,13 @@ def calculate_user_metrics(
     channels, unknown_channels = _channel_results(traffic, traffic_reason)
 
     quality_warnings: dict[str, object] = {"unknown_channels": unknown_channels}
+    payment_warnings: dict[str, object] = {}
     if payment_warning is not None:
-        quality_warnings["unknown_payment_statuses"] = payment_warning
+        payment_warnings["period"] = payment_warning
+    if history_payment_warning is not None:
+        payment_warnings["history"] = history_payment_warning
+    if payment_warnings:
+        quality_warnings["unknown_payment_statuses"] = payment_warnings
 
     return {
         "uv": uv,
@@ -184,6 +189,15 @@ def _successful_period_payments(
     reason = reason or _missing_column(payments, "payment_status")
     if reason is not None:
         return payments.iloc[0:0].copy(), reason, None
+    successful, _, reason, warning = _classify_payment_statuses(
+        payments, "payment"
+    )
+    return successful, reason, warning
+
+
+def _classify_payment_statuses(
+    payments: pd.DataFrame, reason_scope: str
+) -> tuple[pd.DataFrame, pd.DataFrame, str | None, dict[str, object] | None]:
     statuses = payments["payment_status"].map(normalize_status)
     known = statuses.isin(PAYMENT_KNOWN_STATUSES)
     unknown = ~known
@@ -193,15 +207,16 @@ def _successful_period_payments(
         warning = {"count": int(unknown.sum()), "values": values}
     if not payments.empty and not known.any():
         reason = (
-            "empty_payment_status"
+            f"empty_{reason_scope}_status"
             if statuses.eq("").all()
-            else "unknown_payment_status"
+            else f"unknown_{reason_scope}_status"
         )
-        return payments.iloc[0:0].copy(), reason, warning
+        empty = payments.iloc[0:0].copy()
+        return empty, payments.loc[unknown].copy(), reason, warning
     successful = payments.loc[
         accepted_status_mask(payments["payment_status"], PAYMENT_SUCCESS_STATUSES)
     ].copy()
-    return successful, None, warning
+    return successful, payments.loc[unknown].copy(), None, warning
 
 
 def _payment_users(
@@ -278,11 +293,12 @@ def _customer_results(
     start: datetime | pd.Timestamp,
     history_days: int,
     reason: str | None,
-) -> tuple[MetricResult, MetricResult]:
+) -> tuple[MetricResult, MetricResult, dict[str, object] | None]:
     if reason is not None:
         return (
             _unavailable("repeat_rate", reason),
             _unavailable("new_customer_share", reason),
+            None,
         )
     assert payments is not None
     history_start = start - timedelta(days=history_days)
@@ -295,22 +311,36 @@ def _customer_results(
         return (
             _unavailable("repeat_rate", reason),
             _unavailable("new_customer_share", reason),
+            None,
         )
-    successful = history.loc[
-        accepted_status_mask(history["payment_status"], PAYMENT_SUCCESS_STATUSES)
-    ]
-    historical_users, history_reason = _payment_users(orders, successful, None)
+    successful, unknown, history_reason, warning = _classify_payment_statuses(
+        history, "history_payment"
+    )
     if history_reason is not None:
         return (
             _unavailable("repeat_rate", history_reason),
             _unavailable("new_customer_share", history_reason),
+            warning,
+        )
+    historical_users, history_reason = _payment_users(orders, successful, None)
+    uncertain_users, unknown_user_reason = _payment_users(orders, unknown, None)
+    history_reason = history_reason or unknown_user_reason
+    if history_reason is not None:
+        return (
+            _unavailable("repeat_rate", history_reason),
+            _unavailable("new_customer_share", history_reason),
+            warning,
         )
     old_users = period_users & historical_users
+    uncertain_period_users = period_users & uncertain_users
     return (
         _ratio_result("repeat_rate", len(old_users), len(period_users)),
         _ratio_result(
-            "new_customer_share", len(period_users - old_users), len(period_users)
+            "new_customer_share",
+            len(period_users - old_users - uncertain_period_users),
+            len(period_users),
         ),
+        warning,
     )
 
 

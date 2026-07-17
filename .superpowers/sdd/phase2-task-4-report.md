@@ -69,3 +69,27 @@ Windows Python Launcher 能列出 Python 3.13，但对应 WindowsApps 可执行�
 - GREEN 全量：`.venv\\Scripts\\python.exe -m pytest -q`
   输出 `139 passed in 1.89s`。
 - `git diff --check`：退出码 0。
+
+## 历史付款状态质量修复（第三轮）
+
+第二轮复审发现客户历史窗口仍会静默丢弃未知付款状态。本轮按 TDD 补齐：
+
+- 历史窗口有记录但状态全空时，`repeat_rate` 与 `new_customer_share` 返回
+  unavailable，原因为 `empty_history_payment_status`。
+- 历史窗口有记录但状态全未知时，两项客户指标返回 unavailable，原因为
+  `unknown_history_payment_status`。
+- 历史状态混合时，只用已知成功行确认老客；未知状态所关联的本期成交用户不会被
+  确定归为新客。
+- 未知付款状态告警改为 `period` / `history` scope，各自记录排除数量与稳定排序后的值。
+- 周期付款状态正常但历史状态不可判定时，付款转化仍可用，仅客户指标降级。
+
+### 第三轮 RED/GREEN 证据
+
+- RED：历史全空、全未知、混合状态、跨窗口独立降级与 scope warning 共得到
+  5 个预期失败。
+- GREEN 定向：
+  `.venv\\Scripts\\python.exe -m pytest tests/test_user_tool.py tests/test_sales_tool.py tests/test_metric_common.py -q`
+  输出 `72 passed in 0.76s`。
+- GREEN 全量：`.venv\\Scripts\\python.exe -m pytest -q`
+  输出 `143 passed in 1.84s`。
+- `git diff --check`：退出码 0。
