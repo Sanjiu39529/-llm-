@@ -33,3 +33,31 @@
 ## 环境说明
 
 仓库 `.venv313` 的解释器入口指向已失效的 WindowsApps Python 3.13 路径，`py -3.13` 同样无法创建进程。本次使用仓库可用的 Python 3.10 `.venv` 完成全部测试；Python 3.13 需修复本机解释器后复验。
+
+## 审查修复：局部依赖降级
+
+Fix commit：`c7162fa fix: degrade sales metrics by dependency`
+
+### TDD 证据
+
+- RED 命令：`.venv\Scripts\python.exe -m pytest tests/test_sales_tool.py -q`
+- RED 结果：`11 failed, 13 passed`。失败均来自缺表或缺关键列后直接索引产生的 `KeyError`；累计退款恰在 `end` 的新增边界测试已通过，证明原实现的 `.lt(end)` 正确但此前未被有效锁定。
+- GREEN 命令：`.venv\Scripts\python.exe -m pytest tests/test_sales_tool.py -q`
+- GREEN 结果：`24 passed`。
+- 定向回归：`.venv\Scripts\python.exe -m pytest tests/test_sales_tool.py tests/test_metric_common.py -q` → `47 passed`。
+- 全量回归：`.venv\Scripts\python.exe -m pytest -q` → `118 passed`。
+- 差异检查：`git diff --cached --check` → 无输出。
+
+### 最小依赖矩阵
+
+| 指标 | 最小依赖 | 缺依赖时仍独立可用的指标 |
+|---|---|---|
+| GMV | `order_info.order_time/order_amount` | 付款、退款及比率指标 |
+| 实际销售额/客单价 | 周期成功付款的 `paid_at/order_id/payment_amount/payment_status`；截至 `end` 的成功退款 `refunded_at/order_id/refund_amount/refund_status` | GMV、周期退款金额；退款金额缺 `order_id` 时仍可计算 |
+| 周期退款金额 | `refund_info.refunded_at/refund_amount/refund_status` | GMV；缺付款数据或退款 `order_id` 不影响该金额 |
+| 净销售额 | 可用的实际销售额与周期退款金额 | GMV 继续独立 |
+| 件单价 | 实际销售额；成功付款订单 ID；`order_item.order_id/quantity` | 其他金额与退款率不受商品明细缺失影响 |
+| 退款率 | 成功付款 `paid_at/order_id/payment_status`；成功退款 `refunded_at/order_id/refund_status` | 不依赖付款/退款金额列 |
+| 退货率 | 退款率的订单/状态/时间依赖；`refund_quantity`；付款订单关联 `order_item.order_id/quantity` | 缺 `refund_amount` 时仍可计算；缺 `refund_quantity` 只禁用退货率 |
+
+实现不再因付款域失败提前返回整组结果。订单、付款、周期退款、累计退款和明细数量分别建立依赖 reason，再由各指标组合自身依赖。新增参数化测试覆盖缺整表、缺时间列、缺各域 `order_id`、缺金额列和缺明细数量，并断言未受影响指标仍返回基准值。
