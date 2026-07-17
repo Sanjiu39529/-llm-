@@ -2,7 +2,7 @@
 
 ## 本地配置
 
-项目使用 Python 3.11。安装依赖后，将 `.env.example` 复制为 `.env`，并按本地数据库修改 `DATABASE_URL`。`IMPORT_BATCH_SIZE` 默认为 `1000`。
+项目使用 Python 3.11–3.13。安装依赖后，将 `.env.example` 复制为 `.env`，并按本地数据库修改 `DATABASE_URL`。`IMPORT_BATCH_SIZE` 默认为 `1000`。
 
 ```powershell
 python -m pip install -r requirements.txt
