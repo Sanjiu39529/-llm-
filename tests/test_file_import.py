@@ -335,6 +335,36 @@ def test_quality_summary_persists_missing_unmapped_reasons_and_relationships(tmp
     assert audit["relationship_anomalies"] == {}
 
 
+def test_quality_summary_counts_relationship_anomalies(tmp_path: Path) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_import_tables(
+        engine,
+        "CREATE TABLE user_info (user_id TEXT PRIMARY KEY, import_batch_id INTEGER NOT NULL)",
+    )
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE order_info (
+                order_id TEXT PRIMARY KEY, user_id TEXT, order_time DATETIME,
+                is_outlier BOOLEAN, import_batch_id INTEGER NOT NULL
+            )
+        """))
+    path = tmp_path / "relations.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        pd.DataFrame({"user_id": ["u1"]}).to_excel(writer, sheet_name="user_info", index=False)
+        pd.DataFrame({
+            "order_id": ["o1", "o2"], "user_id": ["u1", "missing-user"],
+            "order_time": ["2026-01-01", "2026-01-01"],
+        }).to_excel(writer, sheet_name="order_info", index=False)
+
+    ImportService(engine).import_file(path)
+
+    with engine.connect() as connection:
+        audit = json.loads(connection.scalar(text("SELECT quality_summary FROM import_batch")))
+    assert audit["relationship_anomalies"] == {
+        "order_info.user_id": {"missing_parent": 1}
+    }
+
+
 def test_cross_batch_duplicate_rejects_new_batch_with_failed_audit(tmp_path: Path) -> None:
     engine = create_engine("sqlite:///:memory:")
     _create_import_tables(engine, "CREATE TABLE user_info (user_id TEXT PRIMARY KEY, import_batch_id INTEGER NOT NULL)")
