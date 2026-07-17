@@ -9,6 +9,22 @@ from backend.app.analytics.models import MetricResult
 
 _MONEY_QUANTUM = Decimal("0.01")
 _RATIO_QUANTUM = Decimal("0.0001")
+PAYMENT_SUCCESS_STATUSES = frozenset({"success", "paid", "支付成功", "已支付"})
+PAYMENT_FAILURE_STATUSES = frozenset(
+    {
+        "failed",
+        "failure",
+        "unpaid",
+        "cancelled",
+        "canceled",
+        "支付失败",
+        "未支付",
+        "已取消",
+        "取消",
+    }
+)
+PAYMENT_KNOWN_STATUSES = PAYMENT_SUCCESS_STATUSES | PAYMENT_FAILURE_STATUSES
+REFUND_SUCCESS_STATUSES = frozenset({"success", "refunded", "退款成功", "已退款"})
 
 
 def _as_decimal(value: Decimal | int | float) -> Decimal:
@@ -18,6 +34,20 @@ def _as_decimal(value: Decimal | int | float) -> Decimal:
 def quantize_money(value: Decimal | int | float) -> Decimal:
     """Round a monetary value to two decimal places using business rounding."""
     return _as_decimal(value).quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+def normalize_status(value: object) -> str:
+    """Normalize a status value for deterministic whitelist checks."""
+    if pd.isna(value):
+        return ""
+    return str(value).strip().casefold()
+
+
+def accepted_status_mask(
+    values: pd.Series, accepted: frozenset[str]
+) -> pd.Series:
+    """Return the rows whose normalized statuses are in ``accepted``."""
+    return values.map(normalize_status).isin(accepted)
 
 
 def safe_ratio(

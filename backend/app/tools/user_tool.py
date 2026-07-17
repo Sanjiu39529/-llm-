@@ -5,12 +5,18 @@ from typing import Mapping
 
 import pandas as pd
 
-from backend.app.analytics.common import filter_period, safe_ratio
+from backend.app.analytics.common import (
+    PAYMENT_KNOWN_STATUSES,
+    PAYMENT_SUCCESS_STATUSES,
+    accepted_status_mask,
+    filter_period,
+    normalize_status,
+    safe_ratio,
+)
 from backend.app.analytics.models import MetricResult
 
 
 _CHANNELS = ("自然搜索", "推荐", "付费投放", "直播", "短视频", "活动流量")
-_PAYMENT_SUCCESS = frozenset({"success", "paid", "支付成功", "已支付"})
 _CART_EVENTS = frozenset({"add_to_cart", "加购"})
 
 
@@ -38,7 +44,9 @@ def calculate_user_metrics(
     order_user_reason = order_reason or _missing_column(orders, "user_id")
     order_users = _values(orders, "user_id") if not order_user_reason else set()
 
-    payments, payment_reason = _successful_period_payments(tables, start, end)
+    payments, payment_reason, payment_warning = _successful_period_payments(
+        tables, start, end
+    )
     payment_users, payment_user_reason = _payment_users(
         tables.get("order_info"), payments, payment_reason
     )
@@ -79,6 +87,10 @@ def calculate_user_metrics(
     )
     channels, unknown_channels = _channel_results(traffic, traffic_reason)
 
+    quality_warnings: dict[str, object] = {"unknown_channels": unknown_channels}
+    if payment_warning is not None:
+        quality_warnings["unknown_payment_statuses"] = payment_warning
+
     return {
         "uv": uv,
         "pv": pv,
@@ -91,7 +103,7 @@ def calculate_user_metrics(
         "repeat_rate": repeat_rate,
         "new_customer_share": new_customer_share,
         "channels": channels,
-        "quality_warnings": {"unknown_channels": unknown_channels},
+        "quality_warnings": quality_warnings,
     }
 
 
@@ -165,15 +177,31 @@ def _successful_period_payments(
     tables: Mapping[str, pd.DataFrame],
     start: datetime | pd.Timestamp,
     end: datetime | pd.Timestamp,
-) -> tuple[pd.DataFrame, str | None]:
+) -> tuple[pd.DataFrame, str | None, dict[str, object] | None]:
     payments, reason = _period_frame(
         tables.get("payment_info"), "payment_info", "paid_at", start, end
     )
     reason = reason or _missing_column(payments, "payment_status")
     if reason is not None:
-        return payments.iloc[0:0].copy(), reason
-    statuses = payments["payment_status"].map(_normalize)
-    return payments.loc[statuses.isin(_PAYMENT_SUCCESS)].copy(), None
+        return payments.iloc[0:0].copy(), reason, None
+    statuses = payments["payment_status"].map(normalize_status)
+    known = statuses.isin(PAYMENT_KNOWN_STATUSES)
+    unknown = ~known
+    warning = None
+    if unknown.any():
+        values = sorted({status or "<missing>" for status in statuses.loc[unknown]})
+        warning = {"count": int(unknown.sum()), "values": values}
+    if not payments.empty and not known.any():
+        reason = (
+            "empty_payment_status"
+            if statuses.eq("").all()
+            else "unknown_payment_status"
+        )
+        return payments.iloc[0:0].copy(), reason, warning
+    successful = payments.loc[
+        accepted_status_mask(payments["payment_status"], PAYMENT_SUCCESS_STATUSES)
+    ].copy()
+    return successful, None, warning
 
 
 def _payment_users(
@@ -228,14 +256,17 @@ def _cart_rate(
             normalized_visit = _identifier(visit_id)
             if normalized_visit is not None and key is not None:
                 visit_keys[normalized_visit] = key
+    store_keys = set(_visitor_keys(traffic).dropna().unique())
     cart_users: set[str] = set()
     for _, row in carts.iterrows():
         user = _identifier(row.get("user_id"))
         if user is not None:
-            cart_users.add(f"user:{user}")
+            key = f"user:{user}"
+            if key in store_keys:
+                cart_users.add(key)
             continue
         visit_id = _identifier(row.get("visit_id"))
-        if visit_id in visit_keys:
+        if visit_id in visit_keys and visit_keys[visit_id] in store_keys:
             cart_users.add(visit_keys[visit_id])
     return _ratio_result("cart_rate", len(cart_users), store_uv)
 
@@ -266,7 +297,7 @@ def _customer_results(
             _unavailable("new_customer_share", reason),
         )
     successful = history.loc[
-        history["payment_status"].map(_normalize).isin(_PAYMENT_SUCCESS)
+        accepted_status_mask(history["payment_status"], PAYMENT_SUCCESS_STATUSES)
     ]
     historical_users, history_reason = _payment_users(orders, successful, None)
     if history_reason is not None:
@@ -285,10 +316,22 @@ def _customer_results(
 
 def _channel_results(
     traffic: pd.DataFrame, reason: str | None
-) -> tuple[dict[str, dict[str, int]], list[str]]:
-    empty = {channel: {"uv": 0, "pv": 0} for channel in _CHANNELS}
+) -> tuple[dict[str, dict[str, object]], list[str]]:
     if reason is not None:
-        return empty, []
+        unavailable = {
+            channel: {
+                "uv": None,
+                "pv": None,
+                "available": False,
+                "reason": reason,
+            }
+            for channel in _CHANNELS
+        }
+        return unavailable, []
+    empty = {
+        channel: {"uv": 0, "pv": 0, "available": True, "reason": None}
+        for channel in _CHANNELS
+    }
     if "channel" not in traffic.columns:
         return empty, ["<missing>"]
     keys = _visitor_keys(traffic)
@@ -298,6 +341,8 @@ def _channel_results(
         result[channel] = {
             "uv": int(keys.loc[rows.index].nunique()),
             "pv": len(rows),
+            "available": True,
+            "reason": None,
         }
     unknown = {
         "<missing>" if _identifier(value) is None else str(value).strip()

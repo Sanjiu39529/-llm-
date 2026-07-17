@@ -6,24 +6,22 @@ from typing import Mapping
 
 import pandas as pd
 
-from backend.app.analytics.common import filter_period, quantize_money, safe_ratio
+from backend.app.analytics.common import (
+    PAYMENT_SUCCESS_STATUSES,
+    REFUND_SUCCESS_STATUSES,
+    accepted_status_mask,
+    filter_period,
+    normalize_status,
+    quantize_money,
+    safe_ratio,
+)
 from backend.app.analytics.models import MetricResult
-
-
-_PAYMENT_SUCCESS = frozenset({"success", "paid", "支付成功", "已支付"})
-_REFUND_SUCCESS = frozenset({"success", "refunded", "退款成功", "已退款"})
-
-
-def _normalize_status(value: object) -> str:
-    if pd.isna(value):
-        return ""
-    return str(value).strip().casefold()
 
 
 def _status_reason(frame: pd.DataFrame, column: str, kind: str) -> str | None:
     if column not in frame.columns:
         return f"missing_{kind}_status"
-    if not frame.empty and frame[column].map(_normalize_status).eq("").all():
+    if not frame.empty and frame[column].map(normalize_status).eq("").all():
         return f"empty_{kind}_status"
     return None
 
@@ -31,7 +29,7 @@ def _status_reason(frame: pd.DataFrame, column: str, kind: str) -> str | None:
 def _successful(
     frame: pd.DataFrame, column: str, accepted: frozenset[str]
 ) -> pd.DataFrame:
-    mask = frame[column].map(_normalize_status).isin(accepted)
+    mask = accepted_status_mask(frame[column], accepted)
     return frame.loc[mask].copy()
 
 
@@ -88,7 +86,9 @@ def calculate_sales_metrics(
     successful_payments = (
         period_payments.iloc[0:0].copy()
         if payment_status_reason
-        else _successful(period_payments, "payment_status", _PAYMENT_SUCCESS)
+        else _successful(
+            period_payments, "payment_status", PAYMENT_SUCCESS_STATUSES
+        )
     )
     payment_order_reason = payment_status_reason or _missing_column_reason(
         period_payments, "order_id", "missing_payment_order_id"
@@ -110,7 +110,7 @@ def calculate_sales_metrics(
     successful_period_refunds = (
         period_refunds.iloc[0:0].copy()
         if period_refund_status_reason
-        else _successful(period_refunds, "refund_status", _REFUND_SUCCESS)
+        else _successful(period_refunds, "refund_status", REFUND_SUCCESS_STATUSES)
     )
     refund_order_reason = period_refund_status_reason or _missing_column_reason(
         period_refunds, "order_id", "missing_refund_order_id"
@@ -240,7 +240,7 @@ def _actual_sales_result(
         ("payment_amount", "coupon_discount", "promotion_discount", "shipping_fee"),
     )
     successful_refunds = _successful(
-        relevant_refunds, "refund_status", _REFUND_SUCCESS
+        relevant_refunds, "refund_status", REFUND_SUCCESS_STATUSES
     )
     refunds_by_order = _sum_by_order(successful_refunds, ("refund_amount",))
     fully_refunded = {

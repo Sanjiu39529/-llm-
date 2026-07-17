@@ -45,7 +45,12 @@ def test_strict_visitor_deduplication_and_unidentified_rows_only_add_pv() -> Non
 
     assert metrics["pv"].value == 5
     assert metrics["uv"].value == 2
-    assert metrics["channels"]["自然搜索"] == {"uv": 2, "pv": 5}
+    assert metrics["channels"]["自然搜索"] == {
+        "uv": 2,
+        "pv": 5,
+        "available": True,
+        "reason": None,
+    }
 
 
 def test_first_historical_visit_classifies_period_visitors_as_new_or_old() -> None:
@@ -78,7 +83,11 @@ def test_outputs_six_channels_and_warns_without_merging_unknown_channels() -> No
     metrics = calculate_user_metrics(tables, START, END)
 
     assert set(metrics["channels"]) == set(CHANNELS)
-    assert all(metrics["channels"][channel] == {"uv": 1, "pv": 1} for channel in CHANNELS)
+    assert all(
+        metrics["channels"][channel]
+        == {"uv": 1, "pv": 1, "available": True, "reason": None}
+        for channel in CHANNELS
+    )
     assert sum(item["pv"] for item in metrics["channels"].values()) == 6
     assert metrics["quality_warnings"] == {
         "unknown_channels": ["<missing>", "站外联盟"]
@@ -131,7 +140,30 @@ def test_cart_rate_prefers_event_user_then_links_visit_for_anonymous_event() -> 
 
     metrics = calculate_user_metrics(tables, START, END)
 
-    assert metrics["cart_rate"].value == Decimal("1.0000")
+    assert metrics["cart_rate"].value == Decimal("0.6667")
+
+
+def test_cart_users_without_matching_period_visitor_keys_are_excluded() -> None:
+    tables = _empty_tables()
+    tables["traffic_visit"] = _frame(
+        visit_id=["anonymous"],
+        visited_at=[START],
+        user_id=[None],
+        device_id=["d1"],
+        channel=["自然搜索"],
+    )
+    tables["behavior_info"] = _frame(
+        event_id=["no-visit-account", "device-present-as-account"],
+        event_type=["加购", "add_to_cart"],
+        occurred_at=[START, START],
+        user_id=["ghost", "d1"],
+        visit_id=[None, "anonymous"],
+    )
+
+    metrics = calculate_user_metrics(tables, START, END)
+
+    assert metrics["cart_rate"].value == Decimal("0.0000")
+    assert metrics["cart_rate"].value <= Decimal("1.0000")
 
 
 def test_cart_visit_linkage_ignores_traffic_outside_period() -> None:
@@ -187,6 +219,73 @@ def test_customer_metrics_use_successful_payments_in_configured_history_window()
 
     assert metrics["repeat_rate"].value == Decimal("0.3333")
     assert metrics["new_customer_share"].value == Decimal("0.6667")
+
+
+@pytest.mark.parametrize(
+    ("statuses", "reason"),
+    [
+        ([None, "  "], "empty_payment_status"),
+        (["mystery", "???"], "unknown_payment_status"),
+    ],
+)
+def test_all_unusable_payment_statuses_disable_payment_dependent_metrics(
+    statuses: list[object], reason: str
+) -> None:
+    tables = _empty_tables()
+    tables["traffic_visit"] = _frame(
+        visit_id=["v1", "v2"],
+        visited_at=[START, START],
+        user_id=["u1", "u2"],
+        device_id=[None, None],
+        channel=["自然搜索", "自然搜索"],
+    )
+    tables["order_info"] = _frame(
+        order_id=["o1", "o2"], user_id=["u1", "u2"], order_time=[START, START]
+    )
+    tables["payment_info"] = _frame(
+        order_id=["o1", "o2"], paid_at=[START, START], payment_status=statuses
+    )
+
+    metrics = calculate_user_metrics(tables, START, END)
+
+    for name in (
+        "payment_conversion",
+        "overall_conversion",
+        "repeat_rate",
+        "new_customer_share",
+    ):
+        assert metrics[name].available is False
+        assert metrics[name].reason == reason
+
+
+def test_mixed_known_and_unknown_payment_statuses_warn_and_use_known_rows() -> None:
+    tables = _empty_tables()
+    tables["traffic_visit"] = _frame(
+        visit_id=["v1", "v2"],
+        visited_at=[START, START],
+        user_id=["u1", "u2"],
+        device_id=[None, None],
+        channel=["自然搜索", "自然搜索"],
+    )
+    tables["order_info"] = _frame(
+        order_id=["paid", "failed", "unknown"],
+        user_id=["u1", "u2", "u2"],
+        order_time=[START, START, START],
+    )
+    tables["payment_info"] = _frame(
+        order_id=["paid", "failed", "unknown"],
+        paid_at=[START, START, START],
+        payment_status=["success", "failed", "mystery"],
+    )
+
+    metrics = calculate_user_metrics(tables, START, END)
+
+    assert metrics["payment_conversion"].value == Decimal("0.5000")
+    assert metrics["overall_conversion"].value == Decimal("0.5000")
+    assert metrics["quality_warnings"]["unknown_payment_statuses"] == {
+        "count": 1,
+        "values": ["mystery"],
+    }
 
 
 def test_missing_traffic_only_disables_traffic_dependent_metrics() -> None:
@@ -254,7 +353,8 @@ def test_missing_channel_column_is_reported_as_unattributed_traffic() -> None:
     metrics = calculate_user_metrics(tables, START, END)
 
     assert metrics["channels"] == {
-        channel: {"uv": 0, "pv": 0} for channel in CHANNELS
+        channel: {"uv": 0, "pv": 0, "available": True, "reason": None}
+        for channel in CHANNELS
     }
     assert metrics["quality_warnings"] == {"unknown_channels": ["<missing>"]}
 
@@ -315,3 +415,25 @@ def test_missing_critical_columns_only_disable_dependent_metrics(
     for name in unavailable_names:
         assert metrics[name].available is False
         assert metrics[name].reason == reason
+
+
+@pytest.mark.parametrize(
+    ("missing_table", "reason"),
+    [(True, "missing_traffic_visit"), (False, "missing_visited_at")],
+)
+def test_channels_report_unavailable_when_traffic_dependency_is_missing(
+    missing_table: bool, reason: str
+) -> None:
+    tables = _empty_tables()
+    if missing_table:
+        del tables["traffic_visit"]
+    else:
+        tables["traffic_visit"] = tables["traffic_visit"].drop(columns="visited_at")
+
+    metrics = calculate_user_metrics(tables, START, END)
+
+    assert set(metrics["channels"]) == set(CHANNELS)
+    assert all(
+        channel == {"uv": None, "pv": None, "available": False, "reason": reason}
+        for channel in metrics["channels"].values()
+    )

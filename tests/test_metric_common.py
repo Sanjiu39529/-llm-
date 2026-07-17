@@ -6,7 +6,14 @@ from decimal import Decimal
 import pandas as pd
 import pytest
 
-from backend.app.analytics.common import filter_period, quantize_money, safe_ratio
+from backend.app.analytics.common import (
+    PAYMENT_SUCCESS_STATUSES,
+    accepted_status_mask,
+    filter_period,
+    normalize_status,
+    quantize_money,
+    safe_ratio,
+)
 from backend.app.analytics.config import MetricConfig
 from backend.app.analytics.models import MetricResult
 
@@ -72,6 +79,18 @@ def test_filter_period_reports_a_missing_dependency() -> None:
             datetime(2026, 7, 1),
             datetime(2026, 7, 2),
         )
+
+
+def test_shared_status_helpers_normalize_and_apply_payment_whitelist() -> None:
+    values = pd.Series([" SUCCESS ", "支付成功", "failed", None])
+
+    assert normalize_status(" Paid ") == "paid"
+    assert accepted_status_mask(values, PAYMENT_SUCCESS_STATUSES).tolist() == [
+        True,
+        True,
+        False,
+        False,
+    ]
 
 
 def test_metric_config_has_phase_two_defaults() -> None:
