@@ -7,6 +7,15 @@ from decimal import Decimal
 from backend.app.services.cleaning import clean_frame
 
 
+def valid_attribution_frame(attribution_type: str) -> pd.DataFrame:
+    return pd.DataFrame({
+        "order_id": ["order-1"],
+        "ad_id": ["ad-1"],
+        "attributed_at": ["2026-01-01"],
+        "attribution_type": [attribution_type],
+    })
+
+
 def test_clean_users_fills_missing_and_invalid_age_with_valid_mean() -> None:
     """缺失及越界年龄应使用有效年龄均值填充。"""
     frame = pd.DataFrame(
@@ -258,3 +267,40 @@ def test_payment_and_refund_deduplicate_on_id_or_natural_key(
     result = clean_frame(table_name, frame)
     assert result.frame[id_column].tolist() == ["id-1", "id-3"]
     assert result.summary.deduplicated == 2
+
+
+def test_phase2_amount_and_quantity_fields_reuse_numeric_validation() -> None:
+    payment = clean_frame("payment_info", pd.DataFrame({
+        "order_id": ["valid", "invalid"],
+        "paid_at": ["2026-01-01"] * 2,
+        "payment_amount": ["10", "10"],
+        "coupon_discount": ["1.235", "bad"],
+        "promotion_discount": ["2.345", "2"],
+        "shipping_fee": ["3.455", "3"],
+    }))
+    refund = clean_frame("refund_info", pd.DataFrame({
+        "order_id": ["valid", "fraction"],
+        "refund_amount": ["10", "10"],
+        "refunded_at": ["2026-01-01"] * 2,
+        "refund_quantity": [2, 1.5],
+    }))
+
+    assert payment.frame.loc[0, [
+        "coupon_discount", "promotion_discount", "shipping_fee",
+    ]].tolist() == [Decimal("1.24"), Decimal("2.35"), Decimal("3.46")]
+    assert payment.summary.reasons["coupon_discount"]["invalid_decimal"] == 1
+    assert refund.frame["refund_quantity"].tolist() == [2]
+    assert refund.summary.reasons["refund_quantity"]["invalid_integer"] == 1
+
+
+def test_attribution_type_is_normalised_to_lowercase() -> None:
+    result = clean_frame("ad_attribution", valid_attribution_frame(" Direct "))
+
+    assert result.frame["attribution_type"].tolist() == ["direct"]
+
+
+def test_attribution_type_rejects_unknown_value() -> None:
+    result = clean_frame("ad_attribution", valid_attribution_frame("unknown"))
+
+    assert result.summary.reasons["attribution_type"]["invalid_category"] == 1
+    assert result.frame.empty

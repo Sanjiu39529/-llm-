@@ -69,3 +69,19 @@ def test_contract_fields_aliases_and_generated_fields_cannot_drift() -> None:
         "refund_info", "ads_info", "ad_attribution",
     ):
         assert TABLE_CONTRACTS[table_name].generated_fields == frozenset({"is_outlier"})
+
+
+def test_phase2_optional_fields_are_declared_with_chinese_aliases() -> None:
+    assert {
+        "coupon_discount", "promotion_discount", "shipping_fee",
+    } <= TABLE_CONTRACTS["payment_info"].optional_fields
+    assert "refund_quantity" in TABLE_CONTRACTS["refund_info"].optional_fields
+    assert "device_id" in TABLE_CONTRACTS["traffic_visit"].optional_fields
+    assert "attribution_type" in TABLE_CONTRACTS["ad_attribution"].optional_fields
+
+    assert "优惠券折扣" in TABLE_CONTRACTS["payment_info"].aliases["coupon_discount"]
+    assert "促销折扣" in TABLE_CONTRACTS["payment_info"].aliases["promotion_discount"]
+    assert "运费" in TABLE_CONTRACTS["payment_info"].aliases["shipping_fee"]
+    assert "退款件数" in TABLE_CONTRACTS["refund_info"].aliases["refund_quantity"]
+    assert "设备id" in TABLE_CONTRACTS["traffic_visit"].aliases["device_id"]
+    assert "归因类型" in TABLE_CONTRACTS["ad_attribution"].aliases["attribution_type"]

@@ -99,7 +99,10 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
     ),
     "payment_info": FieldMapping(
         required_fields=frozenset({"order_id", "paid_at", "payment_amount"}),
-        optional_fields=frozenset({"payment_id", "payment_method", "payment_status"}),
+        optional_fields=frozenset({
+            "payment_id", "payment_method", "payment_status",
+            "coupon_discount", "promotion_discount", "shipping_fee",
+        }),
         aliases=_aliases(
             order_id=("订单编号", "订单id", "订单号"),
             paid_at=("支付时间", "付款时间", "支付日期"),
@@ -107,12 +110,17 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             payment_id=("支付id", "支付编号", "交易号"),
             payment_method=("支付方式", "付款方式"),
             payment_status=("支付状态", "付款状态"),
+            coupon_discount=("优惠券折扣",),
+            promotion_discount=("促销折扣",),
+            shipping_fee=("运费",),
         ),
         generated_fields=frozenset({"is_outlier"}),
     ),
     "refund_info": FieldMapping(
         required_fields=frozenset({"order_id", "refund_amount", "refunded_at"}),
-        optional_fields=frozenset({"refund_id", "refund_reason", "refund_status"}),
+        optional_fields=frozenset({
+            "refund_id", "refund_reason", "refund_status", "refund_quantity",
+        }),
         aliases=_aliases(
             order_id=("订单编号", "订单id", "订单号"),
             refund_amount=("退款金额", "退货金额"),
@@ -120,18 +128,20 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             refund_id=("退款id", "退款编号"),
             refund_reason=("退款原因", "退货原因"),
             refund_status=("退款状态", "退货状态"),
+            refund_quantity=("退款件数",),
         ),
         generated_fields=frozenset({"is_outlier"}),
     ),
     "traffic_visit": FieldMapping(
         required_fields=frozenset({"visit_id", "visited_at"}),
-        optional_fields=frozenset({"user_id", "channel", "page_url"}),
+        optional_fields=frozenset({"user_id", "channel", "page_url", "device_id"}),
         aliases=_aliases(
             visit_id=("访问id", "会话id", "session_id"),
             visited_at=("访问时间", "到访时间"),
             user_id=("用户id", "用户编号"),
             channel=("渠道", "来源渠道"),
             page_url=("页面地址", "url", "页面url"),
+            device_id=("设备id",),
         ),
     ),
     "behavior_info": FieldMapping(
@@ -162,13 +172,14 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
     ),
     "ad_attribution": FieldMapping(
         required_fields=frozenset({"order_id", "ad_id", "attributed_at"}),
-        optional_fields=frozenset({"user_id", "attribution_amount"}),
+        optional_fields=frozenset({"user_id", "attribution_amount", "attribution_type"}),
         aliases=_aliases(
             order_id=("订单编号", "订单id", "订单号"),
             ad_id=("广告id", "广告编号", "创意id"),
             attributed_at=("归因时间", "转化时间"),
             user_id=("用户id", "用户编号"),
             attribution_amount=("归因金额", "转化金额"),
+            attribution_type=("归因类型",),
         ),
         generated_fields=frozenset({"is_outlier"}),
     ),

@@ -45,17 +45,23 @@ _AMOUNT_COLUMNS = frozenset(
         "unit_price",
         "item_amount",
         "payment_amount",
+        "coupon_discount",
+        "promotion_discount",
+        "shipping_fee",
         "refund_amount",
         "cost",
         "attribution_amount",
     }
 )
-_INTEGER_COLUMNS = frozenset({"age", "stock", "quantity", "impressions", "clicks"})
+_INTEGER_COLUMNS = frozenset({
+    "age", "stock", "quantity", "refund_quantity", "impressions", "clicks",
+})
 _DECIMAL_MAX = Decimal("9999999999999999.99")
 _DECIMAL_QUANTUM = Decimal("0.01")
 _INTEGER_LIMITS = {
     "stock": (0, 2_147_483_647),
     "quantity": (1, 2_147_483_647),
+    "refund_quantity": (1, 2_147_483_647),
     "impressions": (0, 9_223_372_036_854_775_807),
     "clicks": (0, 9_223_372_036_854_775_807),
 }
@@ -192,6 +198,19 @@ def _validate_rows(
             summary.invalid += int(too_long.sum())
             invalid_rows |= too_long
         frame[column] = converted
+
+    if "attribution_type" in frame:
+        blank = frame["attribution_type"].map(_is_blank)
+        normalised = frame["attribution_type"].map(
+            lambda value: None if _is_blank(value) else str(value).strip().lower()
+        )
+        invalid_category = ~blank & ~normalised.isin({"direct", "indirect"})
+        if invalid_category.any():
+            count = int(invalid_category.sum())
+            summary.record("attribution_type", "invalid_category", count)
+            summary.invalid += count
+            invalid_rows |= invalid_category
+        frame["attribution_type"] = normalised
 
     for column in (_INTEGER_COLUMNS - {"age"}).intersection(frame.columns):
         converted: list[int | None] = []

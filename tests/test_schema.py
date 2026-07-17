@@ -125,3 +125,31 @@ def test_integrity_upgrade_migration_contains_all_phase_one_additions() -> None:
         "ADD UNIQUE KEY uq_refund_info_id",
     ):
         assert fragment in migration
+
+
+def test_schema_contains_phase2_metric_source_fields() -> None:
+    sql = Path("sql/001_schema.sql").read_text(encoding="utf-8")
+    for fragment in (
+        "coupon_discount DECIMAL(18,2) NULL",
+        "promotion_discount DECIMAL(18,2) NULL",
+        "shipping_fee DECIMAL(18,2) NULL",
+        "refund_quantity INT NULL",
+        "device_id VARCHAR(64) NULL",
+        "attribution_type VARCHAR(64) NULL",
+    ):
+        assert fragment in sql
+
+
+def test_phase2_metric_field_migration_only_adds_nullable_columns() -> None:
+    migration = Path("sql/003_phase2_metric_fields.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE" not in migration.upper()
+    assert migration.upper().count("ADD COLUMN") == 6
+    for fragment in (
+        "ADD COLUMN coupon_discount DECIMAL(18,2) NULL",
+        "ADD COLUMN promotion_discount DECIMAL(18,2) NULL",
+        "ADD COLUMN shipping_fee DECIMAL(18,2) NULL",
+        "ADD COLUMN refund_quantity INT NULL",
+        "ADD COLUMN device_id VARCHAR(64) NULL",
+        "ADD COLUMN attribution_type VARCHAR(64) NULL",
+    ):
+        assert fragment in migration
