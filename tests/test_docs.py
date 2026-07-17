@@ -20,9 +20,10 @@ def test_readme_contains_only_intro_quickstart_and_phase_status() -> None:
     assert [line for line in readme.splitlines() if line.startswith("#")] == [
         "# 电商智能数据分析助手",
         "## 最短运行命令",
+        "## 数据库初始化",
         "## Phase 1 状态",
     ]
-    assert len(nonempty_lines) == 11
+    assert len(nonempty_lines) == 13
     assert readme.count("```powershell") == 1
     assert "python -m pip install -r requirements.txt" in readme
     assert "Copy-Item .env.example .env" in readme
@@ -118,3 +119,14 @@ def test_guide_documents_excel_table_rejection_and_decimal_policy() -> None:
     assert "ROUND_HALF_UP" in guide
     assert "9999999999999999.99" in guide
     assert "只有 `order_time`" in guide
+
+
+def test_docs_distinguish_fresh_schema_upgrade_and_memory_boundary() -> None:
+    readme = README_PATH.read_text(encoding="utf-8")
+    guide = GUIDE_PATH.read_text(encoding="utf-8")
+    assert "全新数据库" in readme and "sql/001_schema.sql" in readme
+    assert "旧版 Phase 1 数据库" in readme and "sql/002_phase1_integrity_upgrade.sql" in readme
+    assert "仅控制数据库查询和写入分块" in guide
+    assert "整表加载到内存" in guide
+    assert "文本单元格" in guide and "数值单元格" in guide
+    assert "前导零" in guide
