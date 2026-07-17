@@ -66,22 +66,30 @@ def test_phase_one_guide_documents_quality_summary_boundaries() -> None:
 
     missing_tables = _line_containing(guide, "missing_tables")
     assert "Phase 1" in missing_tables
-    assert "后续分析层" in missing_tables
-    assert "UV" in missing_tables and "ROI" in missing_tables
+    assert "只报告" in missing_tables
+    assert "不执行指标/图表降级" in missing_tables
+    for forbidden_claim in (
+        "Phase 1 执行指标/图表降级",
+        "Phase 1 会执行指标/图表降级",
+        "Phase 1 已执行指标/图表降级",
+    ):
+        assert forbidden_claim not in guide
 
 
 def test_phase_one_guide_matches_current_deduplication_age_and_mapping_behavior() -> None:
     guide = GUIDE_PATH.read_text(encoding="utf-8")
 
-    deduplication = _line_containing(guide, "同业务键")
+    deduplication = _line_containing(guide, "当前去重")
+    assert "只按业务键" in deduplication
     assert "保留首条" in deduplication
-    assert "deduplicated" in deduplication
+    assert "不比较或记录同键内容冲突" in deduplication
 
-    no_valid_age = _line_containing(guide, "没有有效年龄")
-    assert "保留为空" in no_valid_age
+    no_valid_age = _line_containing(guide, "全批次无有效年龄")
+    assert "保持为空" in no_valid_age
     assert 'filled["age"] = 0' in no_valid_age
+    assert "纯缺失或不可解析不会增加" in no_valid_age
+    assert "越界仍会增加" in no_valid_age
 
-    ambiguity = _line_containing(guide, "歧义映射")
-    assert "CLI" in ambiguity
-    assert "拒绝" in ambiguity
-    assert "后续 Streamlit" in ambiguity
+    ambiguity = _line_containing(guide, "人工确认与映射模板保存")
+    assert "都属于后续 Streamlit" in ambiguity
+    assert "当前 CLI 只拒绝歧义" in ambiguity
