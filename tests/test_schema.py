@@ -114,10 +114,10 @@ def test_schema_enforces_payment_and_refund_business_keys() -> None:
 
 def test_integrity_upgrade_migration_contains_all_phase_one_additions() -> None:
     migration = Path("sql/002_phase1_integrity_upgrade.sql").read_text(encoding="utf-8")
+    assert migration.count("ADD COLUMN is_outlier BOOLEAN NOT NULL DEFAULT FALSE") == 7
     for fragment in (
         "ADD COLUMN error_code VARCHAR(64) NULL",
         "ADD COLUMN age INT NULL",
-        "ADD COLUMN is_outlier BOOLEAN NOT NULL DEFAULT FALSE",
         "ADD UNIQUE KEY uq_payment_info_business_key",
         "ADD UNIQUE KEY uq_payment_info_id",
         "ADD UNIQUE KEY uq_refund_info_business_key",
