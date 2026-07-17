@@ -83,12 +83,14 @@ def test_phase_one_guide_matches_current_deduplication_age_and_mapping_behavior(
     assert "只按业务键" in deduplication
     assert "保留首条" in deduplication
     assert "不比较或记录同键内容冲突" in deduplication
+    assert "deduplicated" in deduplication
 
     no_valid_age = _line_containing(guide, "全批次无有效年龄")
     assert "保持为空" in no_valid_age
     assert 'filled["age"] = 0' in no_valid_age
     assert "纯缺失或不可解析不会增加" in no_valid_age
     assert "越界仍会增加" in no_valid_age
+    assert "`invalid`" in no_valid_age
 
     ambiguity = _line_containing(guide, "人工确认与映射模板保存")
     assert "都属于后续 Streamlit" in ambiguity
