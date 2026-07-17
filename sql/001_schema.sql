@@ -28,6 +28,17 @@ CREATE TABLE IF NOT EXISTS user_info (
     INDEX idx_user_info_batch_user (import_batch_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS product_info (
+    product_id VARCHAR(64) PRIMARY KEY,
+    product_name VARCHAR(255) NOT NULL,
+    category VARCHAR(128) NULL,
+    brand VARCHAR(128) NULL,
+    price DECIMAL(18,2) NULL,
+    stock INT NULL,
+    import_batch_id BIGINT UNSIGNED NOT NULL,
+    INDEX idx_product_info_category_brand (category, brand)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS order_info (
     order_id VARCHAR(64) PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL,
@@ -38,6 +49,17 @@ CREATE TABLE IF NOT EXISTS order_info (
     import_batch_id BIGINT UNSIGNED NOT NULL,
     INDEX idx_order_info_user_time (user_id, order_time),
     INDEX idx_order_info_channel_time (channel, order_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS order_item (
+    order_id VARCHAR(64) NOT NULL,
+    product_id VARCHAR(64) NOT NULL,
+    quantity INT NOT NULL,
+    unit_price DECIMAL(18,2) NULL,
+    item_amount DECIMAL(18,2) NULL,
+    import_batch_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY (order_id, product_id),
+    INDEX idx_order_item_product_order (product_id, order_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS payment_info (
@@ -73,6 +95,32 @@ CREATE TABLE IF NOT EXISTS traffic_visit (
     import_batch_id BIGINT UNSIGNED NOT NULL,
     INDEX idx_traffic_visit_user_time (user_id, visited_at),
     INDEX idx_traffic_visit_channel_time (channel, visited_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS behavior_info (
+    event_id VARCHAR(64) PRIMARY KEY,
+    event_type VARCHAR(64) NOT NULL,
+    occurred_at DATETIME NOT NULL,
+    user_id VARCHAR(64) NULL,
+    product_id VARCHAR(64) NULL,
+    visit_id VARCHAR(64) NULL,
+    import_batch_id BIGINT UNSIGNED NOT NULL,
+    INDEX idx_behavior_info_user_time (user_id, occurred_at),
+    INDEX idx_behavior_info_type_time (event_type, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS ads_info (
+    ad_id VARCHAR(64) NOT NULL,
+    ad_date DATETIME NOT NULL,
+    campaign_id VARCHAR(64) NULL,
+    channel VARCHAR(64) NULL,
+    impressions BIGINT NULL,
+    clicks BIGINT NULL,
+    cost DECIMAL(18,2) NULL,
+    import_batch_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY (ad_id, ad_date),
+    INDEX idx_ads_info_campaign_date (campaign_id, ad_date),
+    INDEX idx_ads_info_channel_date (channel, ad_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS ad_attribution (
