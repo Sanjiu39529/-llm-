@@ -1,12 +1,17 @@
-# -llm-
+# 电商智能数据分析助手
 
-## 本地配置
+面向电商运营场景的智能数据分析 MVP。Phase 1 支持将字段名不统一、内容不完整的 Excel/CSV 数据清洗后写入 MySQL，并保留可追溯的导入与数据质量记录。
 
-项目使用 Python 3.11–3.13。安装依赖后，将 `.env.example` 复制为 `.env`，并按本地数据库修改 `DATABASE_URL`。`IMPORT_BATCH_SIZE` 默认为 `1000`。
+## 最短运行命令
 
 ```powershell
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
-pytest tests/test_config.py -v
+python -m backend.scripts.import_data --file data/phase1.xlsx
 ```
-本项目是一个面向电商运营场景、可独立完成的 MVP。运营人员上传 Excel 或 CSV 数据后，可通过自然语言提出问题；系统基于实际导入的数据完成只读查询、指标计算、趋势与异常分析、知识检索、图表展示和文字版运营建议。
+
+CSV 文件还需用 `--table` 指定标准表，例如 `--table user_info`。
+
+## Phase 1 状态
+
+已完成环境配置、标准表与 DDL、字段映射、确定性清洗、Excel/CSV 导入、事务写入和导入审计；指标计算、Agent、API 与界面将在后续 Phase 实现。
