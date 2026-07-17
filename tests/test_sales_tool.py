@@ -32,6 +32,28 @@ def _empty_tables() -> dict[str, pd.DataFrame]:
     }
 
 
+def _complete_tables() -> dict[str, pd.DataFrame]:
+    return {
+        "order_info": _frame(
+            order_id=["one"], order_time=[START], order_amount=[Decimal("100")]
+        ),
+        "payment_info": _frame(
+            order_id=["one"],
+            paid_at=[START],
+            payment_amount=[Decimal("100")],
+            payment_status=["success"],
+        ),
+        "refund_info": _frame(
+            order_id=["one"],
+            refunded_at=[START],
+            refund_amount=[Decimal("10")],
+            refund_status=["success"],
+            refund_quantity=[1],
+        ),
+        "order_item": _frame(order_id=["one"], quantity=[2]),
+    }
+
+
 def test_calculates_sales_metrics_after_aggregating_each_order() -> None:
     tables = {
         "order_info": _frame(
@@ -267,3 +289,176 @@ def test_all_metric_timestamps_use_left_closed_right_open_period() -> None:
     assert metrics["refund_amount"].value == Decimal("2.00")
     assert metrics["refund_rate"].value == Decimal("1.0000")
     assert metrics["return_rate"].value == Decimal("0.5000")
+
+
+@pytest.mark.parametrize(
+    ("table_name", "column", "reason", "unavailable_names"),
+    [
+        ("order_info", None, "missing_order_info", {"gmv"}),
+        ("order_info", "order_time", "missing_order_time", {"gmv"}),
+        ("order_info", "order_amount", "missing_order_amount", {"gmv"}),
+        (
+            "payment_info",
+            None,
+            "missing_payment_info",
+            {
+                "actual_sales",
+                "net_sales",
+                "average_order_value",
+                "item_unit_price",
+                "refund_rate",
+                "return_rate",
+            },
+        ),
+        (
+            "payment_info",
+            "paid_at",
+            "missing_paid_at",
+            {
+                "actual_sales",
+                "net_sales",
+                "average_order_value",
+                "item_unit_price",
+                "refund_rate",
+                "return_rate",
+            },
+        ),
+        (
+            "payment_info",
+            "order_id",
+            "missing_payment_order_id",
+            {
+                "actual_sales",
+                "net_sales",
+                "average_order_value",
+                "item_unit_price",
+                "refund_rate",
+                "return_rate",
+            },
+        ),
+        (
+            "payment_info",
+            "payment_amount",
+            "missing_payment_amount",
+            {
+                "actual_sales",
+                "net_sales",
+                "average_order_value",
+                "item_unit_price",
+            },
+        ),
+        (
+            "refund_info",
+            None,
+            "missing_refund_info",
+            {
+                "actual_sales",
+                "refund_amount",
+                "net_sales",
+                "average_order_value",
+                "item_unit_price",
+                "refund_rate",
+                "return_rate",
+            },
+        ),
+        (
+            "refund_info",
+            "refunded_at",
+            "missing_refunded_at",
+            {
+                "actual_sales",
+                "refund_amount",
+                "net_sales",
+                "average_order_value",
+                "item_unit_price",
+                "refund_rate",
+                "return_rate",
+            },
+        ),
+        (
+            "refund_info",
+            "order_id",
+            "missing_refund_order_id",
+            {
+                "actual_sales",
+                "net_sales",
+                "average_order_value",
+                "item_unit_price",
+                "refund_rate",
+                "return_rate",
+            },
+        ),
+        (
+            "refund_info",
+            "refund_amount",
+            "missing_refund_amount",
+            {
+                "actual_sales",
+                "refund_amount",
+                "net_sales",
+                "average_order_value",
+                "item_unit_price",
+            },
+        ),
+        (
+            "order_item",
+            None,
+            "missing_order_item",
+            {"item_unit_price", "return_rate"},
+        ),
+        (
+            "order_item",
+            "order_id",
+            "missing_item_order_id",
+            {"item_unit_price", "return_rate"},
+        ),
+        (
+            "order_item",
+            "quantity",
+            "missing_item_quantity",
+            {"item_unit_price", "return_rate"},
+        ),
+    ],
+)
+def test_missing_dependencies_only_disable_metrics_that_need_them(
+    table_name: str,
+    column: str | None,
+    reason: str,
+    unavailable_names: set[str],
+) -> None:
+    tables = _complete_tables()
+    if column is None:
+        del tables[table_name]
+    else:
+        tables[table_name] = tables[table_name].drop(columns=column)
+
+    metrics = calculate_sales_metrics(tables, START, END)
+
+    expected_values = {
+        "gmv": Decimal("100.00"),
+        "actual_sales": Decimal("100.00"),
+        "refund_amount": Decimal("10.00"),
+        "net_sales": Decimal("90.00"),
+        "average_order_value": Decimal("100.00"),
+        "item_unit_price": Decimal("50.00"),
+        "refund_rate": Decimal("1.0000"),
+        "return_rate": Decimal("0.5000"),
+    }
+    for name, metric in metrics.items():
+        if name in unavailable_names:
+            assert metric.available is False
+            assert metric.reason == reason
+        else:
+            assert metric.available is True
+            assert metric.value == expected_values[name]
+
+
+def test_refund_exactly_at_end_does_not_remove_period_payment() -> None:
+    tables = _complete_tables()
+    tables["refund_info"]["refunded_at"] = [END]
+    tables["refund_info"]["refund_amount"] = [Decimal("100")]
+
+    metrics = calculate_sales_metrics(tables, START, END)
+
+    assert metrics["actual_sales"].value == Decimal("100.00")
+    assert metrics["refund_amount"].value == Decimal("0.00")
