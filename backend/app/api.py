@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -38,6 +38,12 @@ class AnalysisRequest(BaseModel):
     end: datetime
 
 
+class DashboardQuestionRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+    start: datetime | None = None
+    end: datetime | None = None
+
+
 def create_app(
     supervisor: EcommerceSupervisor | None = None,
     table_loader: Callable[[], Mapping[str, pd.DataFrame]] | None = None,
@@ -59,6 +65,52 @@ def create_app(
                 "error": result.error,
                 "trace": result.trace,
                 "knowledge": result.knowledge,
+            }
+        )
+
+    @app.post("/api/dashboard/ask")
+    def dashboard_question(request: DashboardQuestionRequest) -> dict[str, Any]:
+        """Route a natural-language question to a fixed, display-safe dashboard."""
+        intent = _dashboard_intent(request.question)
+        if intent == "knowledge":
+            result = agent.run(request.question)
+            return jsonable_encoder(
+                {
+                    "intent": intent,
+                    "answer": result.answer,
+                    "error": result.error,
+                    "knowledge": result.knowledge,
+                    "trace": result.trace,
+                }
+            )
+
+        if intent == "funnel":
+            tables = table_loader() if table_loader else _load_database_tables(["behavior_funnel"])
+            funnel = build_funnel_report(tables.get("behavior_funnel"))
+            answer = (
+                "已根据用户行为数据生成页面漏斗与来源转化看板。"
+                if funnel["available"]
+                else "尚未导入可用于用户行为漏斗的数据。请先上传行为分析 CSV 或 Excel。"
+            )
+            return jsonable_encoder({"intent": intent, "answer": answer, "dashboard": funnel})
+
+        end = request.end or datetime.now()
+        start = request.start or end - timedelta(days=30)
+        if start >= end:
+            raise HTTPException(status_code=422, detail="start_must_be_before_end")
+        tables = table_loader() if table_loader else _load_database_tables()
+        report = agent.run(
+            "分析请求", tables=tables, start=start, end=end, config=MetricConfig()
+        )
+        if report.error:
+            raise HTTPException(status_code=422, detail=report.error)
+        return jsonable_encoder(
+            {
+                "intent": intent,
+                "answer": "已按固定指标口径生成经营分析看板。未提供统计时间时默认展示最近 30 天。",
+                "dashboard": report.report,
+                "trace": report.trace,
+                "period": {"start": start, "end": end},
             }
         )
 
@@ -122,6 +174,21 @@ def _frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         if column.endswith(("_time", "_at", "_date")):
             frame[column] = pd.to_datetime(frame[column], errors="coerce")
     return frame
+
+
+def _dashboard_intent(question: str) -> str:
+    """Classify only the presentation path; business metric formulas stay unchanged."""
+    normalized = question.lower()
+    if any(word in normalized for word in ("口径", "定义", "规则", "怎么算", "如何计算", "是什么")):
+        return "knowledge"
+    if any(word in normalized for word in ("漏斗", "用户行为", "页面", "来源", "渠道转化", "设备")):
+        return "funnel"
+    if any(
+        word in normalized
+        for word in ("gmv", "销售", "营收", "订单", "退款", "roi", "投放", "流量", "转化", "客单")
+    ):
+        return "analysis"
+    return "knowledge"
 
 
 def _load_database_tables(table_names: list[str] | None = None) -> Mapping[str, pd.DataFrame]:

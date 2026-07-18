@@ -8,12 +8,13 @@ import pytest
 from frontend.app import _read_json
 
 
-def test_frontend_renders_import_and_knowledge_workflows():
+def test_frontend_renders_question_driven_dashboard_and_import_workflow():
     app = AppTest.from_file("frontend/app.py").run()
 
     assert app.title[0].value == "电商智能数据分析助手"
     assert len(app.file_uploader) == 1
-    assert [tab.label for tab in app.tabs] == ["导入数据", "分析看板", "用户行为漏斗", "业务知识问答"]
+    assert [tab.label for tab in app.tabs] == ["智能问答看板", "导入数据"]
+    assert len(app.chat_input) == 1
 
 
 def test_frontend_surfaces_non_json_http_error_as_readable_message(monkeypatch):

@@ -73,3 +73,58 @@ def test_funnel_endpoint_returns_page_funnel_from_injected_read_model():
 
     assert response.status_code == 200
     assert response.json()["funnel"][0]["visitors"] == 1
+
+
+def test_dashboard_question_routes_to_a_funnel_dashboard():
+    client = TestClient(
+        create_app(
+            EcommerceSupervisor(),
+            table_loader=lambda: {
+                "behavior_funnel": pd.DataFrame(
+                    [{"new_user": 1, "source": "Direct", "total_pages_visited": 2, "home_page": 1, "listing_page": 1, "product_page": 0, "payment_page": 0, "confirmation_page": 0}]
+                )
+            },
+        )
+    )
+
+    response = client.post("/api/dashboard/ask", json={"question": "分析用户行为漏斗"})
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "funnel"
+    assert response.json()["dashboard"]["funnel"][0]["visitors"] == 1
+
+
+def test_dashboard_question_routes_metric_definition_to_knowledge():
+    client = TestClient(create_app(EcommerceSupervisor()))
+
+    response = client.post("/api/dashboard/ask", json={"question": "GMV 的口径是什么？"})
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "knowledge"
+    assert response.json()["knowledge"]
+
+
+def test_dashboard_question_routes_sales_question_to_fixed_metric_report():
+    client = TestClient(
+        create_app(
+            EcommerceSupervisor(),
+            table_loader=lambda: {
+                "order_info": pd.DataFrame(
+                    [{"order_id": "o1", "order_time": pd.Timestamp("2026-01-01"), "order_amount": "100"}]
+                )
+            },
+        )
+    )
+
+    response = client.post(
+        "/api/dashboard/ask",
+        json={
+            "question": "查看 GMV",
+            "start": "2026-01-01T00:00:00",
+            "end": "2026-01-02T00:00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "analysis"
+    assert response.json()["dashboard"]["metrics"]["sales"]["gmv"]["value"] == 100.0

@@ -80,7 +80,34 @@ def main() -> None:
     api_url = st.sidebar.text_input("API 地址", DEFAULT_API_URL).rstrip("/")
     st.sidebar.caption("请先启动 FastAPI：`python -m uvicorn backend.app.api:app --reload`")
 
-    import_tab, dashboard_tab, funnel_tab, ask_tab = st.tabs(["导入数据", "分析看板", "用户行为漏斗", "业务知识问答"])
+    st.session_state.setdefault("chat_history", [])
+    chat_tab, import_tab = st.tabs(["智能问答看板", "导入数据"])
+    with chat_tab:
+        st.caption("直接描述你想看的内容；系统会按固定口径自动生成经营看板、用户漏斗或规则说明。")
+        if st.button("清空对话", icon=":material/delete_sweep:"):
+            st.session_state.chat_history = []
+            st.rerun()
+        if not st.session_state.chat_history:
+            st.info("示例：分析用户行为漏斗｜最近 30 天 GMV 和退款情况｜GMV 的口径是什么？")
+        for message in st.session_state.chat_history:
+            with st.chat_message(message["role"]):
+                if message["role"] == "user":
+                    st.write(message["content"])
+                else:
+                    _show_dashboard_answer(message["content"])
+        question = st.chat_input("例如：分析用户行为漏斗", key="dashboard_question")
+        if question:
+            st.session_state.chat_history.append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.write(question)
+            with st.chat_message("assistant"):
+                try:
+                    result = _post_json(f"{api_url}/api/dashboard/ask", {"question": question})
+                except (URLError, TimeoutError, RuntimeError) as exc:
+                    result = {"error": f"无法连接 API：{exc}"}
+                _show_dashboard_answer(result)
+            st.session_state.chat_history.append({"role": "assistant", "content": result})
+
     with import_tab:
         st.subheader("导入 CSV 或 Excel")
         upload = st.file_uploader("选择文件", type=["csv", "xlsx"])
@@ -100,50 +127,22 @@ def main() -> None:
                 for recommendation in result.get("analysis_recommendations", []):
                     st.write(f"- {recommendation}")
                 st.json(result)
-                if "behavior_funnel" in result["processed_tables"]:
-                    _show_funnel(_get_json(f"{api_url}/api/funnels", {}))
 
-    with dashboard_tab:
-        st.subheader("数据库分析报告")
-        start, end = st.columns(2)
-        start_date = start.date_input("开始日期")
-        end_date = end.date_input("结束日期")
-        if st.button("生成报告"):
-            try:
-                result = _get_json(
-                    f"{api_url}/api/reports",
-                    {"start": start_date.isoformat(), "end": end_date.isoformat()},
-                )
-            except (URLError, TimeoutError, RuntimeError) as exc:
-                st.error(f"无法连接 API：{exc}")
-            else:
-                _show_report(result.get("report", {}))
 
-    with funnel_tab:
-        st.subheader("用户行为漏斗")
-        st.caption("适用于用户画像与页面访问标记数据，不替代订单或 GMV 分析。")
-        if st.button("生成漏斗分析"):
-            try:
-                _show_funnel(_get_json(f"{api_url}/api/funnels", {}))
-            except (URLError, TimeoutError, RuntimeError) as exc:
-                st.error(f"获取漏斗失败：{exc}")
-
-    with ask_tab:
-        st.subheader("运营规则与指标口径")
-        question = st.text_input("例如：GMV 的口径是什么？")
-        if st.button("提问", disabled=not question.strip()):
-            try:
-                result = _post_json(f"{api_url}/api/ask", {"question": question})
-            except (URLError, TimeoutError, RuntimeError) as exc:
-                st.error(f"无法连接 API：{exc}")
-            else:
-                if result.get("error"):
-                    st.warning(f"未得到结果：{result['error']}")
-                else:
-                    st.write(result.get("answer"))
-                    for item in result.get("knowledge", []):
-                        st.caption(f"来源：{item['source']} · {item['title']}")
-                        st.write(item["content"])
+def _show_dashboard_answer(result: dict[str, Any]) -> None:
+    if result.get("error"):
+        st.warning(result["error"])
+        return
+    st.write(result.get("answer", "未得到可展示的结果。"))
+    intent = result.get("intent")
+    if intent == "analysis":
+        _show_report(result.get("dashboard", {}))
+    elif intent == "funnel":
+        _show_funnel(result.get("dashboard", {}))
+    elif intent == "knowledge":
+        for item in result.get("knowledge", []):
+            st.caption(f"来源：{item['source']} · {item['title']}")
+            st.write(item["content"])
 
 
 def _show_report(report: dict[str, Any]) -> None:
