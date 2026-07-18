@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+import pandas as pd
 import streamlit as st
 
 
@@ -23,6 +25,10 @@ def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
         method="POST",
     )
     return _read_json(request)
+
+
+def _get_json(url: str, parameters: dict[str, str]) -> dict[str, Any]:
+    return _read_json(Request(f"{url}?{urlencode(parameters)}"))
 
 
 def _post_file(url: str, filename: str, content: bytes, table: str | None) -> dict[str, Any]:
@@ -62,7 +68,7 @@ def main() -> None:
     api_url = st.sidebar.text_input("API 地址", DEFAULT_API_URL).rstrip("/")
     st.sidebar.caption("请先启动 FastAPI：`python -m uvicorn backend.app.api:app --reload`")
 
-    import_tab, ask_tab = st.tabs(["导入数据", "业务知识问答"])
+    import_tab, dashboard_tab, ask_tab = st.tabs(["导入数据", "分析看板", "业务知识问答"])
     with import_tab:
         st.subheader("导入 CSV 或 Excel")
         upload = st.file_uploader("选择文件", type=["csv", "xlsx"])
@@ -80,6 +86,22 @@ def main() -> None:
                 st.success("导入完成")
                 st.json(result)
 
+    with dashboard_tab:
+        st.subheader("数据库分析报告")
+        start, end = st.columns(2)
+        start_date = start.date_input("开始日期")
+        end_date = end.date_input("结束日期")
+        if st.button("生成报告"):
+            try:
+                result = _get_json(
+                    f"{api_url}/api/reports",
+                    {"start": start_date.isoformat(), "end": end_date.isoformat()},
+                )
+            except (URLError, TimeoutError) as exc:
+                st.error(f"无法连接 API：{exc}")
+            else:
+                _show_report(result.get("report", {}))
+
     with ask_tab:
         st.subheader("运营规则与指标口径")
         question = st.text_input("例如：GMV 的口径是什么？")
@@ -96,6 +118,31 @@ def main() -> None:
                     for item in result.get("knowledge", []):
                         st.caption(f"来源：{item['source']} · {item['title']}")
                         st.write(item["content"])
+
+
+def _show_report(report: dict[str, Any]) -> None:
+    sales = report.get("metrics", {}).get("sales", {})
+    labels = {"gmv": "成交 GMV", "actual_sales": "实际销售额", "net_sales": "净销售额", "refund_amount": "退款金额"}
+    available = {
+        name: metric.get("value")
+        for name, metric in sales.items()
+        if name in labels and metric.get("available") and metric.get("value") is not None
+    }
+    columns = st.columns(len(labels))
+    for column, name in zip(columns, labels):
+        column.metric(labels[name], available.get(name, "数据缺失"))
+    if available:
+        chart = pd.DataFrame({"金额": [available[name] for name in available]}, index=[labels[name] for name in available])
+        st.bar_chart(chart)
+    if report.get("valuable_anomalies"):
+        st.warning("发现值得复核的异常")
+        st.json(report["valuable_anomalies"])
+    if report.get("recommendations"):
+        st.subheader("运营建议")
+        for recommendation in report["recommendations"]:
+            st.write(f"- {recommendation}")
+    if report.get("missing_dependencies"):
+        st.info("缺少依赖表：" + "、".join(report["missing_dependencies"]))
 
 
 if __name__ == "__main__":

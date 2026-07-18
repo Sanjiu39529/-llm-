@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import pandas as pd
@@ -17,6 +18,7 @@ from sqlalchemy import create_engine
 from backend.app.agents.supervisor import EcommerceSupervisor
 from backend.app.analytics.config import MetricConfig
 from backend.app.config import Settings
+from backend.app.database.analysis_repository import AnalysisRepository
 from backend.app.services.import_service import ImportService
 
 
@@ -30,7 +32,10 @@ class AnalysisRequest(BaseModel):
     end: datetime
 
 
-def create_app(supervisor: EcommerceSupervisor | None = None) -> FastAPI:
+def create_app(
+    supervisor: EcommerceSupervisor | None = None,
+    table_loader: Callable[[], Mapping[str, pd.DataFrame]] | None = None,
+) -> FastAPI:
     app = FastAPI(title="电商智能数据分析助手", version="0.1.0")
     agent = supervisor or EcommerceSupervisor()
 
@@ -57,6 +62,14 @@ def create_app(supervisor: EcommerceSupervisor | None = None) -> FastAPI:
         result = agent.run(
             "分析请求", tables=tables, start=request.start, end=request.end, config=MetricConfig()
         )
+        if result.error:
+            raise HTTPException(status_code=422, detail=result.error)
+        return jsonable_encoder({"report": result.report, "trace": result.trace})
+
+    @app.get("/api/reports")
+    def report_from_database(start: datetime, end: datetime) -> dict[str, Any]:
+        tables = table_loader() if table_loader else _load_database_tables()
+        result = agent.run("分析请求", tables=tables, start=start, end=end, config=MetricConfig())
         if result.error:
             raise HTTPException(status_code=422, detail=result.error)
         return jsonable_encoder({"report": result.report, "trace": result.trace})
@@ -89,6 +102,11 @@ def _frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         if column.endswith(("_time", "_at", "_date")):
             frame[column] = pd.to_datetime(frame[column], errors="coerce")
     return frame
+
+
+def _load_database_tables() -> Mapping[str, pd.DataFrame]:
+    settings = Settings()
+    return AnalysisRepository().load_tables(create_engine(settings.database_url))
 
 
 app = create_app()
