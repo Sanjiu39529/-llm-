@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Mapping, TypedDict
+from urllib.error import URLError
 
 import pandas as pd
 from langgraph.graph import END, START, StateGraph
@@ -13,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 from backend.app.analytics.config import MetricConfig
 from backend.app.analytics.report import build_analysis_report
 from backend.app.knowledge.retriever import KnowledgeChunk, MarkdownKnowledgeBase
+from backend.app.knowledge.rag_answerer import KnowledgeAnswerer
 from backend.app.nl2sql.service import (
     Nl2SqlService,
     QueryResult,
@@ -56,6 +58,7 @@ class EcommerceSupervisor:
         generator: SqlGenerator | None = None,
         executor: ReadonlySqlExecutor | None = None,
         knowledge_base: MarkdownKnowledgeBase | None = None,
+        knowledge_answerer: KnowledgeAnswerer | None = None,
         max_rows: int = 1000,
     ) -> None:
         self._generator = generator
@@ -63,6 +66,7 @@ class EcommerceSupervisor:
         self._knowledge_base = knowledge_base or MarkdownKnowledgeBase.from_directory(
             Path(__file__).resolve().parents[3] / "docs" / "knowledge"
         )
+        self._knowledge_answerer = knowledge_answerer
         self._sql_service = Nl2SqlService(max_rows)
         self._graph = self._build_graph()
 
@@ -174,8 +178,16 @@ class EcommerceSupervisor:
                 "trace": [*state["trace"], "tool:knowledge_search"],
             }
         sources = "、".join(chunk.source for chunk in knowledge)
+        answer = f"已从知识库检索到相关运营规则，来源：{sources}。"
+        trace = [*state["trace"], "tool:knowledge_search"]
+        if self._knowledge_answerer is not None:
+            try:
+                answer = self._knowledge_answerer.answer(state["question"], knowledge)
+                trace.append("tool:rag_answer")
+            except (TimeoutError, URLError, ValueError):
+                trace.append("tool:rag_answer_fallback")
         return {
             "knowledge": knowledge,
-            "answer": f"已从知识库检索到相关运营规则，来源：{sources}。",
-            "trace": [*state["trace"], "tool:knowledge_search"],
+            "answer": answer,
+            "trace": trace,
         }

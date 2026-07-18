@@ -16,6 +16,11 @@ class FixedGenerator:
         return "SELECT order_id FROM order_info"
 
 
+class FixedKnowledgeAnswerer:
+    def answer(self, question, chunks) -> str:
+        return "成交 GMV 按固定口径计算。[1]"
+
+
 def test_supervisor_routes_analysis_question_to_existing_report_tools():
     result = EcommerceSupervisor().run(
         "分析本期 GMV",
@@ -72,3 +77,10 @@ def test_supervisor_reports_when_knowledge_base_has_no_matching_content():
 
     assert result.route == "knowledge"
     assert result.error == "knowledge_not_found"
+
+
+def test_supervisor_can_use_optional_llm_only_after_local_rag_retrieval():
+    result = EcommerceSupervisor(knowledge_answerer=FixedKnowledgeAnswerer()).run("GMV 的口径是什么？")
+
+    assert result.answer == "成交 GMV 按固定口径计算。[1]"
+    assert result.trace == ("supervisor:knowledge", "tool:knowledge_search", "tool:rag_answer")

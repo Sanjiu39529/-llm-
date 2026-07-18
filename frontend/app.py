@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -25,10 +24,6 @@ def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
         method="POST",
     )
     return _read_json(request)
-
-
-def _get_json(url: str, parameters: dict[str, str]) -> dict[str, Any]:
-    return _read_json(Request(f"{url}?{urlencode(parameters)}"))
 
 
 def _post_file(url: str, filename: str, content: bytes, table: str | None) -> dict[str, Any]:
@@ -75,58 +70,110 @@ def _read_json(request: Request) -> dict[str, Any]:
 
 
 def main() -> None:
-    st.set_page_config(page_title="电商智能数据分析助手", page_icon="📊", layout="wide")
+    st.set_page_config(page_title="电商智能数据分析助手", page_icon=":material/analytics:", layout="wide")
     st.title("电商智能数据分析助手")
     api_url = st.sidebar.text_input("API 地址", DEFAULT_API_URL).rstrip("/")
-    st.sidebar.caption("请先启动 FastAPI：`python -m uvicorn backend.app.api:app --reload`")
+    st.sidebar.caption("数据与指标由后端固定规则计算；LLM 只在 RAG 边界内解释知识。")
 
     st.session_state.setdefault("chat_history", [])
-    chat_tab, import_tab = st.tabs(["智能问答看板", "导入数据"])
-    with chat_tab:
-        st.caption("直接描述你想看的内容；系统会按固定口径自动生成经营看板、用户漏斗或规则说明。")
-        if st.button("清空对话", icon=":material/delete_sweep:"):
-            st.session_state.chat_history = []
-            st.rerun()
-        if not st.session_state.chat_history:
-            st.info("示例：分析用户行为漏斗｜最近 30 天 GMV 和退款情况｜GMV 的口径是什么？")
-        for message in st.session_state.chat_history:
-            with st.chat_message(message["role"]):
-                if message["role"] == "user":
-                    st.write(message["content"])
-                else:
-                    _show_dashboard_answer(message["content"])
-        question = st.chat_input("例如：分析用户行为漏斗", key="dashboard_question")
-        if question:
-            st.session_state.chat_history.append({"role": "user", "content": question})
-            with st.chat_message("user"):
-                st.write(question)
-            with st.chat_message("assistant"):
-                try:
-                    result = _post_json(f"{api_url}/api/dashboard/ask", {"question": question})
-                except (URLError, TimeoutError, RuntimeError) as exc:
-                    result = {"error": f"无法连接 API：{exc}"}
-                _show_dashboard_answer(result)
-            st.session_state.chat_history.append({"role": "assistant", "content": result})
-
-    with import_tab:
-        st.subheader("导入 CSV 或 Excel")
-        upload = st.file_uploader("选择文件", type=["csv", "xlsx"])
-        with st.expander("无法自动识别时，手动选择表", expanded=False):
-            table = st.selectbox("CSV 对应标准表", ["自动识别", *CSV_TABLES])
-        target_table = None if table == "自动识别" else table
-        if st.button("自动识别、清洗并导入", disabled=upload is None):
-            try:
-                result = _post_file(
-                    f"{api_url}/api/imports", upload.name, upload.getvalue(), target_table
-                )
-            except (URLError, TimeoutError, RuntimeError) as exc:
-                st.error(f"导入失败：{exc}")
+    st.session_state.setdefault("pending_uploads", {})
+    if st.button("新建对话", icon=":material/add_comment:"):
+        st.session_state.chat_history = []
+        st.session_state.pending_uploads = {}
+        st.rerun()
+    if not st.session_state.chat_history:
+        st.info("直接提问，或在下方附加 CSV/Excel。示例：分析用户行为漏斗｜查看 GMV｜GMV 的口径是什么？")
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"], avatar=":material/smart_toy:" if message["role"] == "assistant" else None):
+            if message["role"] == "user":
+                st.write(message["content"])
             else:
-                detected = "、".join(result["processed_tables"])
-                st.success(f"已识别为：{detected}；导入完成")
-                for recommendation in result.get("analysis_recommendations", []):
-                    st.write(f"- {recommendation}")
-                st.json(result)
+                _show_assistant_message(message, api_url)
+
+    submission = st.chat_input(
+        "输入业务问题，或附加 CSV/Excel 后发送",
+        key="dashboard_question",
+        accept_file="multiple",
+        file_type=["csv", "xlsx"],
+        submit_mode="disable",
+    )
+    if submission:
+        text = submission.text.strip()
+        files = list(submission.files)
+        content = text or "已发送文件：" + "、".join(file.name for file in files)
+        st.session_state.chat_history.append({"role": "user", "content": content})
+        with st.chat_message("user"):
+            st.write(content)
+        for upload in files:
+            _append_import_message(api_url, upload.name, upload.getvalue())
+        if text:
+            try:
+                result = _post_json(f"{api_url}/api/dashboard/ask", {"question": text})
+            except (URLError, TimeoutError, RuntimeError) as exc:
+                result = {"error": f"暂时无法连接分析服务：{exc}"}
+            message = {"role": "assistant", "content": {"kind": "dashboard", "data": result}}
+            with st.chat_message("assistant", avatar=":material/smart_toy:"):
+                _show_assistant_message(message, api_url)
+            st.session_state.chat_history.append(message)
+
+
+def _append_import_message(api_url: str, filename: str, content: bytes) -> None:
+    try:
+        result = _post_file(f"{api_url}/api/imports", filename, content, None)
+    except (URLError, TimeoutError, RuntimeError) as exc:
+        result = {"status": "service_unavailable", "message": f"暂时无法连接导入服务：{exc}"}
+    upload_id = uuid4().hex
+    if result.get("status") == "needs_table_confirmation":
+        st.session_state.pending_uploads[upload_id] = {"filename": filename, "content": content}
+    message = {"role": "assistant", "content": {"kind": "import", "data": result, "upload_id": upload_id}}
+    with st.chat_message("assistant", avatar=":material/smart_toy:"):
+        _show_assistant_message(message, api_url)
+    st.session_state.chat_history.append(message)
+
+
+def _show_assistant_message(message: dict[str, Any], api_url: str) -> None:
+    content = message["content"]
+    if content.get("kind") == "import":
+        _show_import_answer(message, api_url)
+        return
+    _show_dashboard_answer(content["data"])
+
+
+def _show_import_answer(message: dict[str, Any], api_url: str) -> None:
+    content = message["content"]
+    result = content["data"]
+    status = result.get("status")
+    if status == "needs_table_confirmation":
+        st.write(result["message"])
+        selected = st.selectbox(
+            "选择数据类型",
+            result["available_tables"],
+            key=f"table_{content['upload_id']}",
+        )
+        if st.button("按此类型继续导入", key=f"import_{content['upload_id']}", icon=":material/upload:"):
+            upload = st.session_state.pending_uploads.get(content["upload_id"])
+            if upload is None:
+                st.warning("文件已不在当前对话中，请重新附加后发送。")
+                return
+            try:
+                imported = _post_file(f"{api_url}/api/imports", upload["filename"], upload["content"], selected)
+            except (URLError, TimeoutError, RuntimeError) as exc:
+                st.warning(f"暂时无法连接导入服务：{exc}")
+                return
+            content["data"] = imported
+            st.session_state.pending_uploads.pop(content["upload_id"], None)
+            st.rerun()
+        return
+    if status == "needs_csv_confirmation":
+        st.write(result["message"])
+        return
+    if status == "service_unavailable":
+        st.warning(result["message"])
+        return
+    detected = "、".join(result.get("processed_tables", []))
+    st.success(f"已完成导入：{detected}，写入 {result.get('written_rows', 0)} 行。")
+    for recommendation in result.get("analysis_recommendations", []):
+        st.write(f"- {recommendation}")
 
 
 def _show_dashboard_answer(result: dict[str, Any]) -> None:

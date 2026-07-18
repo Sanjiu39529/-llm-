@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 import pandas as pd
 
 from backend.app.agents.supervisor import EcommerceSupervisor
-from backend.app.api import create_app
+from backend.app.api import _import_recovery, create_app
 
 
 def test_health_and_knowledge_question_are_available_over_http():
@@ -128,3 +128,11 @@ def test_dashboard_question_routes_sales_question_to_fixed_metric_report():
     assert response.status_code == 200
     assert response.json()["intent"] == "analysis"
     assert response.json()["dashboard"]["metrics"]["sales"]["gmv"]["value"] == 100.0
+
+
+def test_unknown_file_structure_returns_guided_confirmation_instead_of_import_error():
+    response = _import_recovery("cannot_auto_identify: reason=no_matching_table candidates=[]")
+
+    assert response is not None
+    assert response["status"] == "needs_table_confirmation"
+    assert "order_info" in response["available_tables"]

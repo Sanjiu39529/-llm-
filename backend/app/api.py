@@ -13,7 +13,7 @@ from typing import Any
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -22,6 +22,8 @@ from backend.app.analytics.config import MetricConfig
 from backend.app.analytics.funnel import build_funnel_report
 from backend.app.config import Settings
 from backend.app.database.analysis_repository import AnalysisRepository
+from backend.app.datasources.base import STANDARD_TABLES
+from backend.app.knowledge.rag_answerer import OpenAICompatibleRagAnswerer
 from backend.app.services.import_service import ImportService
 
 
@@ -49,7 +51,7 @@ def create_app(
     table_loader: Callable[[], Mapping[str, pd.DataFrame]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="电商智能数据分析助手", version="0.1.0")
-    agent = supervisor or EcommerceSupervisor()
+    agent = supervisor or _configured_supervisor()
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -153,6 +155,9 @@ def create_app(
                 engine = create_engine(settings.database_url)
                 report = ImportService(engine, settings.import_batch_size).import_file(path, table)
             except ValueError as exc:
+                recovery = _import_recovery(str(exc))
+                if recovery is not None:
+                    return recovery
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except SQLAlchemyError as exc:
                 logger.exception("导入时数据库不可用或数据表缺失")
@@ -174,6 +179,37 @@ def _frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         if column.endswith(("_time", "_at", "_date")):
             frame[column] = pd.to_datetime(frame[column], errors="coerce")
     return frame
+
+
+def _configured_supervisor() -> EcommerceSupervisor:
+    """LLM is optional; the deterministic local RAG path always remains available."""
+    try:
+        settings = Settings()
+    except ValidationError:
+        return EcommerceSupervisor()
+    if all((settings.llm_base_url, settings.llm_api_key, settings.llm_model)):
+        return EcommerceSupervisor(
+            knowledge_answerer=OpenAICompatibleRagAnswerer(
+                settings.llm_base_url, settings.llm_api_key, settings.llm_model
+            )
+        )
+    return EcommerceSupervisor()
+
+
+def _import_recovery(detail: str) -> dict[str, Any] | None:
+    """Turn uncertain structure into a guided next step, never a false import success."""
+    if detail.startswith("cannot_auto_identify"):
+        return {
+            "status": "needs_table_confirmation",
+            "message": "文件已读取，但无法安全判断业务数据类型。请选择最接近的数据类型后继续导入。",
+            "available_tables": sorted(STANDARD_TABLES),
+        }
+    if detail == "文件中未找到可导入的标准表":
+        return {
+            "status": "needs_csv_confirmation",
+            "message": "Excel 已读取，但没有可安全识别的工作表。请将需要导入的一个工作表另存为 CSV 后重新发送。",
+        }
+    return None
 
 
 def _dashboard_intent(question: str) -> str:
