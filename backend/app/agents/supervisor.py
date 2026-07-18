@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Mapping, TypedDict
 
 import pandas as pd
@@ -11,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 
 from backend.app.analytics.config import MetricConfig
 from backend.app.analytics.report import build_analysis_report
+from backend.app.knowledge.retriever import KnowledgeChunk, MarkdownKnowledgeBase
 from backend.app.nl2sql.service import (
     Nl2SqlService,
     QueryResult,
@@ -29,6 +31,7 @@ class AgentState(TypedDict, total=False):
     route: str
     report: dict[str, object]
     query_result: QueryResult
+    knowledge: tuple[KnowledgeChunk, ...]
     answer: str
     error: str
     trace: list[str]
@@ -40,6 +43,7 @@ class AgentRunResult:
     answer: str | None
     report: dict[str, object] | None
     query_result: QueryResult | None
+    knowledge: tuple[KnowledgeChunk, ...]
     error: str | None
     trace: tuple[str, ...]
 
@@ -51,10 +55,14 @@ class EcommerceSupervisor:
         self,
         generator: SqlGenerator | None = None,
         executor: ReadonlySqlExecutor | None = None,
+        knowledge_base: MarkdownKnowledgeBase | None = None,
         max_rows: int = 1000,
     ) -> None:
         self._generator = generator
         self._executor = executor
+        self._knowledge_base = knowledge_base or MarkdownKnowledgeBase.from_directory(
+            Path(__file__).resolve().parents[3] / "docs" / "knowledge"
+        )
         self._sql_service = Nl2SqlService(max_rows)
         self._graph = self._build_graph()
 
@@ -81,6 +89,7 @@ class EcommerceSupervisor:
             answer=state.get("answer"),
             report=state.get("report"),
             query_result=state.get("query_result"),
+            knowledge=state.get("knowledge", ()),
             error=state.get("error"),
             trace=tuple(state.get("trace", [])),
         )
@@ -90,18 +99,31 @@ class EcommerceSupervisor:
         graph.add_node("supervisor", self._supervisor_node)
         graph.add_node("analysis_report", self._analysis_node)
         graph.add_node("safe_query", self._query_node)
+        graph.add_node("knowledge_search", self._knowledge_node)
         graph.add_edge(START, "supervisor")
         graph.add_conditional_edges(
-            "supervisor", self._route, {"analysis": "analysis_report", "query": "safe_query"}
+            "supervisor",
+            self._route,
+            {
+                "analysis": "analysis_report",
+                "query": "safe_query",
+                "knowledge": "knowledge_search",
+            },
         )
         graph.add_edge("analysis_report", END)
         graph.add_edge("safe_query", END)
+        graph.add_edge("knowledge_search", END)
         return graph.compile()
 
     @staticmethod
     def _supervisor_node(state: AgentState) -> AgentState:
         question = state.get("question", "").strip()
-        route = "query" if any(token in question.lower() for token in ("sql", "原始", "明细")) else "analysis"
+        if any(token in question.lower() for token in ("sql", "原始", "明细")):
+            route = "query"
+        elif any(token in question for token in ("知识库", "口径", "规则", "定义", "解释")):
+            route = "knowledge"
+        else:
+            route = "analysis"
         return {"route": route, "trace": [*state.get("trace", []), f"supervisor:{route}"]}
 
     @staticmethod
@@ -142,4 +164,18 @@ class EcommerceSupervisor:
             "query_result": result,
             "answer": "已执行通过安全校验的只读查询。",
             "trace": [*state["trace"], "tool:safe_query"],
+        }
+
+    def _knowledge_node(self, state: AgentState) -> AgentState:
+        knowledge = self._knowledge_base.search(state["question"])
+        if not knowledge:
+            return {
+                "error": "knowledge_not_found",
+                "trace": [*state["trace"], "tool:knowledge_search"],
+            }
+        sources = "、".join(chunk.source for chunk in knowledge)
+        return {
+            "knowledge": knowledge,
+            "answer": f"已从知识库检索到相关运营规则，来源：{sources}。",
+            "trace": [*state["trace"], "tool:knowledge_search"],
         }

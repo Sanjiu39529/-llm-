@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 
 from backend.app.agents.supervisor import EcommerceSupervisor
 from backend.app.analytics.config import MetricConfig
+from backend.app.knowledge.retriever import MarkdownKnowledgeBase
 from backend.app.nl2sql.service import ReadonlySqlExecutor
 
 
@@ -54,3 +55,20 @@ def test_supervisor_routes_sql_through_readonly_executor():
     assert result.route == "query"
     assert result.query_result is not None
     assert result.query_result.rows == (("o1",),)
+
+
+def test_supervisor_routes_metric_definition_to_local_knowledge_base():
+    result = EcommerceSupervisor().run("GMV 的口径是什么？")
+
+    assert result.route == "knowledge"
+    assert result.error is None
+    assert result.knowledge[0].source == "knowledge/电商指标口径.md"
+    assert "成交 GMV" in result.knowledge[0].content
+    assert result.trace == ("supervisor:knowledge", "tool:knowledge_search")
+
+
+def test_supervisor_reports_when_knowledge_base_has_no_matching_content():
+    result = EcommerceSupervisor(knowledge_base=MarkdownKnowledgeBase(())).run("知识库规则")
+
+    assert result.route == "knowledge"
+    assert result.error == "knowledge_not_found"
