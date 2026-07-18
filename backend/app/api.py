@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from collections.abc import Callable, Mapping
@@ -14,6 +15,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.agents.supervisor import EcommerceSupervisor
 from backend.app.analytics.config import MetricConfig
@@ -21,6 +23,9 @@ from backend.app.analytics.funnel import build_funnel_report
 from backend.app.config import Settings
 from backend.app.database.analysis_repository import AnalysisRepository
 from backend.app.services.import_service import ImportService
+
+
+logger = logging.getLogger(__name__)
 
 
 class AskRequest(BaseModel):
@@ -97,6 +102,11 @@ def create_app(
                 report = ImportService(engine, settings.import_batch_size).import_file(path, table)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except SQLAlchemyError as exc:
+                logger.exception("导入时数据库不可用或数据表缺失")
+                raise HTTPException(
+                    status_code=503, detail="database_unavailable_or_schema_missing"
+                ) from exc
         return {
             **asdict(report),
             "auto_detected": table is None,

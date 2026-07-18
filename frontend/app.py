@@ -60,10 +60,18 @@ def _post_file(url: str, filename: str, content: bytes, table: str | None) -> di
 def _read_json(request: Request) -> dict[str, Any]:
     try:
         with urlopen(request, timeout=180) as response:  # nosec B310: URL is entered by the local user.
-            return json.loads(response.read().decode("utf-8"))
+            body = response.read().decode("utf-8")
     except HTTPError as exc:
-        payload = json.loads(exc.read().decode("utf-8"))
-        raise RuntimeError(payload.get("detail", f"HTTP {exc.code}")) from exc
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(body).get("detail", f"HTTP {exc.code}")
+        except json.JSONDecodeError:
+            detail = body.strip() or f"HTTP {exc.code}"
+        raise RuntimeError(detail) from exc
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("API returned a non-JSON response") from exc
 
 
 def main() -> None:
