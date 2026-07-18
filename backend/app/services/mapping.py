@@ -20,6 +20,16 @@ class MappingResult:
     ambiguous_columns: dict[str, list[str]]
 
 
+@dataclass(frozen=True, slots=True)
+class TableDetection:
+    """根据列名给出的可解释表识别结论。"""
+
+    table_name: str | None
+    matched_fields: tuple[str, ...]
+    candidates: tuple[str, ...]
+    reason: str | None
+
+
 def _normalise_column_name(column_name: str) -> str:
     """去除空白、下划线和连字符后，以小写形式比较列名。"""
     return _SEPARATOR_PATTERN.sub("", column_name).lower()
@@ -69,4 +79,23 @@ def suggest_mapping(table_name: str, columns: list[str]) -> MappingResult:
         mapping=mapping,
         unmapped_required=unmapped_required,
         ambiguous_columns=ambiguous_columns,
+    )
+
+
+def detect_table(columns: list[str]) -> TableDetection:
+    """仅在唯一候选满足必填字段且无歧义时自动识别表类型。"""
+    candidates: list[tuple[str, MappingResult]] = []
+    for table_name in sorted(TABLE_CONTRACTS):
+        result = suggest_mapping(table_name, columns)
+        if not result.unmapped_required and not result.ambiguous_columns:
+            candidates.append((table_name, result))
+    if not candidates:
+        return TableDetection(None, (), (), "no_matching_table")
+    highest_score = max(len(result.mapping) for _, result in candidates)
+    winners = [(name, result) for name, result in candidates if len(result.mapping) == highest_score]
+    if len(winners) != 1:
+        return TableDetection(None, (), tuple(name for name, _ in winners), "ambiguous_table")
+    table_name, result = winners[0]
+    return TableDetection(
+        table_name, tuple(sorted(result.mapping.values())), tuple(name for name, _ in candidates), None
     )

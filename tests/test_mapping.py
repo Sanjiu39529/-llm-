@@ -2,7 +2,7 @@
 
 import backend.app.services.mapping as mapping_module
 from backend.app.datasources.base import FieldMapping, TABLE_CONTRACTS
-from backend.app.services.mapping import suggest_mapping
+from backend.app.services.mapping import detect_table, suggest_mapping
 from pytest import MonkeyPatch
 
 
@@ -24,6 +24,26 @@ def test_suggest_mapping_reports_missing_required_columns() -> None:
     result = suggest_mapping("payment_info", ["订单编号", "支付金额"])
 
     assert "paid_at" in result.unmapped_required
+
+
+def test_detect_table_identifies_user_behavior_funnel_from_source_columns() -> None:
+    detection = detect_table(
+        [
+            "new_user", "age", "sex", "market", "device", "operative_system", "source",
+            "total_pages_visited", "home_page", "listing_page", "product_page", "payment_page", "confirmation_page",
+        ]
+    )
+
+    assert detection.table_name == "behavior_funnel"
+    assert detection.reason is None
+    assert "confirmation_page" in detection.matched_fields
+
+
+def test_detect_table_refuses_unknown_columns():
+    detection = detect_table(["random_field"])
+
+    assert detection.table_name is None
+    assert detection.reason == "no_matching_table"
 
 
 def test_suggest_mapping_normalises_whitespace_underscores_and_hyphens() -> None:

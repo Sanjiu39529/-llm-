@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from backend.app.datasources.base import STANDARD_TABLES
+from backend.app.services.mapping import detect_table
 
 
 class FileImportAdapter:
@@ -17,29 +18,31 @@ class FileImportAdapter:
         path = Path(path)
         suffix = path.suffix.lower()
         if suffix == ".csv":
+            frame = pd.read_csv(path, dtype=object, keep_default_na=False)
             if target_table is None:
-                choices = ", ".join(sorted(STANDARD_TABLES))
-                raise ValueError(f"CSV 必须指定 target_table，可选表名: {choices}")
+                detection = detect_table(list(frame.columns))
+                if detection.table_name is None:
+                    raise ValueError(
+                        f"cannot_auto_identify: reason={detection.reason} candidates={list(detection.candidates)}"
+                    )
+                target_table = detection.table_name
             if target_table not in STANDARD_TABLES:
                 raise ValueError(f"不支持的标准表: {target_table}")
-            return {
-                target_table: pd.read_csv(
-                    path, dtype=object, keep_default_na=False
-                )
-            }
+            return {target_table: frame}
 
         if suffix == ".xlsx":
             if target_table is not None:
                 raise ValueError("--table 仅适用于 CSV；Excel 会导入所有已知工作表")
             workbook = pd.ExcelFile(path)
-            known_sheets = [
-                sheet for sheet in workbook.sheet_names if sheet in STANDARD_TABLES
-            ]
-            return pd.read_excel(
-                workbook,
-                sheet_name=known_sheets,
-                dtype=object,
-                keep_default_na=False,
-            )
+            frames = pd.read_excel(workbook, sheet_name=None, dtype=object, keep_default_na=False)
+            detected: dict[str, pd.DataFrame] = {}
+            for sheet_name, frame in frames.items():
+                table_name = sheet_name if sheet_name in STANDARD_TABLES else detect_table(list(frame.columns)).table_name
+                if table_name is None:
+                    continue
+                if table_name in detected:
+                    raise ValueError(f"duplicate_detected_table: {table_name}")
+                detected[table_name] = frame
+            return detected
 
         raise ValueError(f"不支持的文件类型: {suffix or '<无扩展名>'}")

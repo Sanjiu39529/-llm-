@@ -97,7 +97,11 @@ def create_app(
                 report = ImportService(engine, settings.import_batch_size).import_file(path, table)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return asdict(report)
+        return {
+            **asdict(report),
+            "auto_detected": table is None,
+            "analysis_recommendations": _recommend_reports(report.processed_tables),
+        }
 
     return app
 
@@ -115,6 +119,20 @@ def _load_database_tables(table_names: list[str] | None = None) -> Mapping[str, 
     return AnalysisRepository().load_tables(
         create_engine(settings.database_url), table_names or None
     )
+
+
+def _recommend_reports(table_names: list[str]) -> list[str]:
+    tables = set(table_names)
+    recommendations = ["数据质量摘要：已生成，包含清洗、跳过与字段映射审计。"]
+    if "behavior_funnel" in tables:
+        recommendations.append("用户行为漏斗：可立即查看页面漏斗、来源与设备转化。")
+    if "order_info" in tables:
+        recommendations.append("销售报告：选择统计区间后可计算 GMV 与订单相关指标。")
+    if "traffic_visit" in tables:
+        recommendations.append("流量报告：可计算 UV、PV 与渠道流量。")
+    if "ads_info" in tables:
+        recommendations.append("投放报告：可计算 CTR、CPC、CPM 和 ROI（需归因数据支持）。")
+    return recommendations
 
 
 app = create_app()

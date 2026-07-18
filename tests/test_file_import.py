@@ -15,7 +15,7 @@ from backend.app.services.import_service import ImportReport, ImportService
 from backend.app.services.import_service import CrossBatchDuplicateError
 
 
-def test_csv_requires_target_table_and_returns_one_frame(tmp_path: Path) -> None:
+def test_csv_auto_detects_table_and_returns_one_frame(tmp_path: Path) -> None:
     path = tmp_path / "orders.csv"
     path.write_text(
         "订单编号,用户ID,下单时间,渠道,订单状态\n"
@@ -23,7 +23,7 @@ def test_csv_requires_target_table_and_returns_one_frame(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    frames = FileImportAdapter().read(path, target_table="order_info")
+    frames = FileImportAdapter().read(path)
 
     assert list(frames) == ["order_info"]
     assert frames["order_info"].iloc[0]["订单编号"] == "o1"
@@ -48,11 +48,11 @@ def test_excel_rejects_target_table_instead_of_ignoring_it(tmp_path: Path) -> No
         FileImportAdapter().read(path, target_table="user_info")
 
 
-def test_csv_without_target_table_lists_available_tables(tmp_path: Path) -> None:
+def test_csv_without_matching_table_returns_explainable_error(tmp_path: Path) -> None:
     path = tmp_path / "users.csv"
-    path.write_text("用户ID\nu1\n", encoding="utf-8")
+    path.write_text("random_field\nvalue\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="user_info"):
+    with pytest.raises(ValueError, match="cannot_auto_identify"):
         FileImportAdapter().read(path)
 
 

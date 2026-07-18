@@ -101,7 +101,7 @@ def test_phase_one_guide_matches_current_deduplication_age_and_mapping_behavior(
 def test_guide_separates_future_goal_from_current_phase_and_matches_audit_contract() -> None:
     guide = GUIDE_PATH.read_text(encoding="utf-8")
     introduction = _line_containing(guide, "项目最终目标")
-    assert "Phase 9 用户行为漏斗" in introduction
+    assert "Phase 10 自动识别与报告建议" in introduction
     assert "我开发了一个基于 LLM Agent" not in guide
     for token in (
         "unmapped_source_columns", "relationship_anomalies", "error_code",

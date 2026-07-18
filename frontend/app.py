@@ -76,19 +76,24 @@ def main() -> None:
     with import_tab:
         st.subheader("导入 CSV 或 Excel")
         upload = st.file_uploader("选择文件", type=["csv", "xlsx"])
-        table = None
-        if upload and upload.name.lower().endswith(".csv"):
-            table = st.selectbox("CSV 对应标准表", CSV_TABLES)
-        if st.button("清洗并导入", disabled=upload is None):
+        with st.expander("无法自动识别时，手动选择表", expanded=False):
+            table = st.selectbox("CSV 对应标准表", ["自动识别", *CSV_TABLES])
+        target_table = None if table == "自动识别" else table
+        if st.button("自动识别、清洗并导入", disabled=upload is None):
             try:
                 result = _post_file(
-                    f"{api_url}/api/imports", upload.name, upload.getvalue(), table
+                    f"{api_url}/api/imports", upload.name, upload.getvalue(), target_table
                 )
             except (URLError, TimeoutError, RuntimeError) as exc:
                 st.error(f"导入失败：{exc}")
             else:
-                st.success("导入完成")
+                detected = "、".join(result["processed_tables"])
+                st.success(f"已识别为：{detected}；导入完成")
+                for recommendation in result.get("analysis_recommendations", []):
+                    st.write(f"- {recommendation}")
                 st.json(result)
+                if "behavior_funnel" in result["processed_tables"]:
+                    _show_funnel(_get_json(f"{api_url}/api/funnels", {}))
 
     with dashboard_tab:
         st.subheader("数据库分析报告")
