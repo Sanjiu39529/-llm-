@@ -98,19 +98,18 @@ def test_phase_one_guide_matches_current_deduplication_age_and_mapping_behavior(
     assert "当前 CLI 只拒绝歧义" in ambiguity
 
 
-def test_guide_separates_future_goal_from_phase_one_and_matches_audit_contract() -> None:
+def test_guide_separates_future_goal_from_current_phase_and_matches_audit_contract() -> None:
     guide = GUIDE_PATH.read_text(encoding="utf-8")
     introduction = _line_containing(guide, "项目最终目标")
-    assert "当前仅完成 Phase 1" in introduction
+    assert "当前已完成 Phase 1 数据导入与 Phase 2" in introduction
     assert "我开发了一个基于 LLM Agent" not in guide
     for token in (
         "unmapped_source_columns", "relationship_anomalies", "error_code",
         "cross_batch_duplicate", "reasons", "IMPORT_BATCH_SIZE",
     ):
         assert token in guide
-    assert "支付金额、优惠券、满减和运费" not in guide
-    assert "退款状态、退货数量" not in guide
-    assert "访客、设备、访问时间" not in guide
+    assert "GMV" in guide
+    assert "Decimal" in guide
 
 
 def test_guide_documents_excel_table_rejection_and_decimal_policy() -> None:
