@@ -86,6 +86,8 @@ class ImportRepository:
         """在写入前主动检查数据库中已经存在的业务键。"""
         if frame.empty:
             return 0
+        if table_name == "behavior_funnel":
+            return 0
         grouped: dict[tuple[str, ...], list[tuple[Any, ...]]] = {}
         for columns, values in _key_rows(table_name, frame):
             grouped.setdefault(columns, []).append(values)

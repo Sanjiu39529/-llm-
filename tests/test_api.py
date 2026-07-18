@@ -55,3 +55,21 @@ def test_database_report_endpoint_uses_injected_read_model():
 
     assert response.status_code == 200
     assert response.json()["report"]["metrics"]["sales"]["gmv"]["value"] == 100.0
+
+
+def test_funnel_endpoint_returns_page_funnel_from_injected_read_model():
+    client = TestClient(
+        create_app(
+            EcommerceSupervisor(),
+            table_loader=lambda: {
+                "behavior_funnel": pd.DataFrame(
+                    [{"new_user": 1, "source": "Direct", "total_pages_visited": 2, "home_page": 1, "listing_page": 1, "product_page": 0, "payment_page": 0, "confirmation_page": 0}]
+                )
+            },
+        )
+    )
+
+    response = client.get("/api/funnels")
+
+    assert response.status_code == 200
+    assert response.json()["funnel"][0]["visitors"] == 1

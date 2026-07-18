@@ -17,6 +17,7 @@ from sqlalchemy import create_engine
 
 from backend.app.agents.supervisor import EcommerceSupervisor
 from backend.app.analytics.config import MetricConfig
+from backend.app.analytics.funnel import build_funnel_report
 from backend.app.config import Settings
 from backend.app.database.analysis_repository import AnalysisRepository
 from backend.app.services.import_service import ImportService
@@ -74,6 +75,11 @@ def create_app(
             raise HTTPException(status_code=422, detail=result.error)
         return jsonable_encoder({"report": result.report, "trace": result.trace})
 
+    @app.get("/api/funnels")
+    def funnel_from_database() -> dict[str, Any]:
+        tables = table_loader() if table_loader else _load_database_tables(["behavior_funnel"])
+        return jsonable_encoder(build_funnel_report(tables.get("behavior_funnel")))
+
     @app.post("/api/imports")
     async def import_data(
         file: UploadFile = File(...), table: str | None = Form(default=None)
@@ -104,9 +110,11 @@ def _frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return frame
 
 
-def _load_database_tables() -> Mapping[str, pd.DataFrame]:
+def _load_database_tables(table_names: list[str] | None = None) -> Mapping[str, pd.DataFrame]:
     settings = Settings()
-    return AnalysisRepository().load_tables(create_engine(settings.database_url))
+    return AnalysisRepository().load_tables(
+        create_engine(settings.database_url), table_names or None
+    )
 
 
 app = create_app()

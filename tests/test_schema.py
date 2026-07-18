@@ -13,6 +13,7 @@ BUSINESS_TABLES = (
     "behavior_info",
     "ads_info",
     "ad_attribution",
+    "behavior_funnel",
 )
 
 
@@ -48,7 +49,7 @@ def test_schema_enforces_audit_type_and_index_invariants() -> None:
     ):
         assert fragment in sql
 
-    assert sql.count("DEFAULT CHARSET=utf8mb4") == 12
+    assert sql.count("DEFAULT CHARSET=utf8mb4") == len(BUSINESS_TABLES) + 2
 
 
 def test_schema_declares_money_and_time_field_types() -> None:
@@ -88,6 +89,7 @@ def test_schema_declares_money_and_time_field_types() -> None:
             "attributed_at": "DATETIME",
             "attribution_amount": "DECIMAL(18,2)",
         },
+        "behavior_funnel": {"total_pages_visited": "INT"},
     }
 
     for table, fields in field_types.items():

@@ -54,7 +54,9 @@ _AMOUNT_COLUMNS = frozenset(
     }
 )
 _INTEGER_COLUMNS = frozenset({
-    "age", "stock", "quantity", "refund_quantity", "impressions", "clicks",
+    "age", "stock", "quantity", "refund_quantity", "impressions", "clicks", "new_user",
+    "market", "total_pages_visited", "home_page", "listing_page", "product_page",
+    "payment_page", "confirmation_page",
 })
 _DECIMAL_MAX = Decimal("9999999999999999.99")
 _DECIMAL_QUANTUM = Decimal("0.01")
@@ -64,6 +66,10 @@ _INTEGER_LIMITS = {
     "refund_quantity": (1, 2_147_483_647),
     "impressions": (0, 9_223_372_036_854_775_807),
     "clicks": (0, 9_223_372_036_854_775_807),
+    "new_user": (0, 1), "market": (0, 2_147_483_647), "total_pages_visited": (0, 2_147_483_647),
+    "home_page": (0, 2_147_483_647), "listing_page": (0, 2_147_483_647),
+    "product_page": (0, 2_147_483_647), "payment_page": (0, 2_147_483_647),
+    "confirmation_page": (0, 2_147_483_647),
 }
 _TEXT_LIMITS = {
     "user_name": 255, "email": 255, "product_name": 255,
@@ -324,6 +330,8 @@ def _deduplicate(frame: pd.DataFrame, table_name: str) -> pd.Series:
             if has_id:
                 seen_ids.add(identifier)
         return duplicate
+    elif table_name == "behavior_funnel":
+        return frame.duplicated(keep="first")
     else:
         keys = list(_BUSINESS_KEYS[table_name])
 

@@ -8,13 +8,16 @@ from sqlalchemy import Engine, text
 from backend.app.datasources.base import STANDARD_TABLES
 
 
+DEFAULT_ANALYSIS_TABLES = STANDARD_TABLES.difference({"behavior_funnel"})
+
+
 class AnalysisRepository:
     """仅按标准表白名单读取数据，供报告内核使用。"""
 
     def load_tables(
-        self, engine: Engine, table_names: Iterable[str] = STANDARD_TABLES
+        self, engine: Engine, table_names: Iterable[str] | None = None
     ) -> dict[str, pd.DataFrame]:
-        names = tuple(table_names)
+        names = tuple(table_names if table_names is not None else DEFAULT_ANALYSIS_TABLES)
         unknown = set(names).difference(STANDARD_TABLES)
         if unknown:
             raise ValueError(f"unsupported_analysis_tables: {sorted(unknown)}")

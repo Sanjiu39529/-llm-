@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
@@ -14,7 +14,7 @@ import streamlit as st
 
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
-CSV_TABLES = ["user_info", "product_info", "order_info", "order_item", "payment_info", "refund_info", "traffic_visit", "behavior_info", "ads_info", "ad_attribution"]
+CSV_TABLES = ["user_info", "product_info", "order_info", "order_item", "payment_info", "refund_info", "traffic_visit", "behavior_info", "behavior_funnel", "ads_info", "ad_attribution"]
 
 
 def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -58,8 +58,12 @@ def _post_file(url: str, filename: str, content: bytes, table: str | None) -> di
 
 
 def _read_json(request: Request) -> dict[str, Any]:
-    with urlopen(request, timeout=30) as response:  # nosec B310: URL is entered by the local user.
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(request, timeout=180) as response:  # nosec B310: URL is entered by the local user.
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        payload = json.loads(exc.read().decode("utf-8"))
+        raise RuntimeError(payload.get("detail", f"HTTP {exc.code}")) from exc
 
 
 def main() -> None:
@@ -68,7 +72,7 @@ def main() -> None:
     api_url = st.sidebar.text_input("API 地址", DEFAULT_API_URL).rstrip("/")
     st.sidebar.caption("请先启动 FastAPI：`python -m uvicorn backend.app.api:app --reload`")
 
-    import_tab, dashboard_tab, ask_tab = st.tabs(["导入数据", "分析看板", "业务知识问答"])
+    import_tab, dashboard_tab, funnel_tab, ask_tab = st.tabs(["导入数据", "分析看板", "用户行为漏斗", "业务知识问答"])
     with import_tab:
         st.subheader("导入 CSV 或 Excel")
         upload = st.file_uploader("选择文件", type=["csv", "xlsx"])
@@ -80,8 +84,8 @@ def main() -> None:
                 result = _post_file(
                     f"{api_url}/api/imports", upload.name, upload.getvalue(), table
                 )
-            except (URLError, TimeoutError) as exc:
-                st.error(f"无法连接 API：{exc}")
+            except (URLError, TimeoutError, RuntimeError) as exc:
+                st.error(f"导入失败：{exc}")
             else:
                 st.success("导入完成")
                 st.json(result)
@@ -97,10 +101,19 @@ def main() -> None:
                     f"{api_url}/api/reports",
                     {"start": start_date.isoformat(), "end": end_date.isoformat()},
                 )
-            except (URLError, TimeoutError) as exc:
+            except (URLError, TimeoutError, RuntimeError) as exc:
                 st.error(f"无法连接 API：{exc}")
             else:
                 _show_report(result.get("report", {}))
+
+    with funnel_tab:
+        st.subheader("用户行为漏斗")
+        st.caption("适用于用户画像与页面访问标记数据，不替代订单或 GMV 分析。")
+        if st.button("生成漏斗分析"):
+            try:
+                _show_funnel(_get_json(f"{api_url}/api/funnels", {}))
+            except (URLError, TimeoutError, RuntimeError) as exc:
+                st.error(f"获取漏斗失败：{exc}")
 
     with ask_tab:
         st.subheader("运营规则与指标口径")
@@ -108,7 +121,7 @@ def main() -> None:
         if st.button("提问", disabled=not question.strip()):
             try:
                 result = _post_json(f"{api_url}/api/ask", {"question": question})
-            except (URLError, TimeoutError) as exc:
+            except (URLError, TimeoutError, RuntimeError) as exc:
                 st.error(f"无法连接 API：{exc}")
             else:
                 if result.get("error"):
@@ -143,6 +156,26 @@ def _show_report(report: dict[str, Any]) -> None:
             st.write(f"- {recommendation}")
     if report.get("missing_dependencies"):
         st.info("缺少依赖表：" + "、".join(report["missing_dependencies"]))
+
+
+def _show_funnel(report: dict[str, Any]) -> None:
+    if not report.get("available"):
+        st.info("尚未导入用户行为漏斗数据。")
+        return
+    with st.container(horizontal=True):
+        st.metric("匿名访客数", report["visitors"], border=True)
+        ratio = report.get("new_user_ratio")
+        st.metric("新访客占比", "数据缺失" if ratio is None else f"{ratio:.1%}", border=True)
+    stages = pd.DataFrame(report["funnel"])
+    with st.container(border=True):
+        st.subheader("页面访问漏斗")
+        st.bar_chart(stages, x="stage", y="visitors")
+        st.dataframe(stages, hide_index=True)
+    dimensions = pd.DataFrame(report["source_conversion"])
+    if not dimensions.empty:
+        with st.container(border=True):
+            st.subheader("来源渠道确认页转化")
+            st.bar_chart(dimensions, x="dimension", y="confirmation_rate")
 
 
 if __name__ == "__main__":

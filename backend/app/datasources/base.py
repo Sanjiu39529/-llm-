@@ -34,6 +34,7 @@ STANDARD_TABLES: frozenset[str] = frozenset(
         "behavior_info",
         "ads_info",
         "ad_attribution",
+        "behavior_funnel",
     }
 )
 
@@ -182,5 +183,18 @@ TABLE_CONTRACTS: dict[str, FieldMapping] = {
             attribution_type=("归因类型",),
         ),
         generated_fields=frozenset({"is_outlier"}),
+    ),
+    "behavior_funnel": FieldMapping(
+        required_fields=frozenset({"total_pages_visited"}),
+        optional_fields=frozenset({
+            "new_user", "age", "sex", "market", "device", "operative_system", "source",
+            "home_page", "listing_page", "product_page", "payment_page", "confirmation_page",
+        }),
+        aliases=_aliases(
+            new_user=("新用户",), age=("年龄",), sex=("性别",), market=("市场",),
+            device=("设备",), operative_system=("操作系统",), source=("来源", "渠道"),
+            total_pages_visited=("总访问页数",), home_page=("首页",), listing_page=("列表页",),
+            product_page=("商品页",), payment_page=("支付页",), confirmation_page=("确认页",),
+        ),
     ),
 }
