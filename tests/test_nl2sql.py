@@ -32,6 +32,7 @@ def test_service_rejects_write_comments_multiple_statements_and_unknown_tables()
         "SELECT * FROM order_info; DELETE FROM order_info",
         "SELECT * FROM order_info -- bypass",
         "SELECT * FROM secret_table",
+        "SELECT * FROM order_info, secret_table",
     )
 
     for sql in invalid_sql:

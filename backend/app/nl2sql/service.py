@@ -131,21 +131,34 @@ def _tokenize(sql: str) -> list[str]:
 def _validate_tables(tokens: list[str]) -> None:
     allowed = set(TABLE_CONTRACTS)
     ctes = _cte_names(tokens)
+    terminators = frozenset({"where", "group", "having", "order", "limit", "on", "union"})
     index = 0
+    in_table_list = False
+    expect_table = False
     while index < len(tokens):
-        if tokens[index].lower() not in {"from", "join"}:
+        token = tokens[index]
+        lowered = token.lower()
+        if lowered in {"from", "join"}:
+            in_table_list = True
+            expect_table = True
             index += 1
             continue
-        if index + 1 >= len(tokens):
-            raise SqlGuardError("table_reference_required")
-        table = tokens[index + 1]
-        if table == "(":
+        if in_table_list and lowered in terminators:
+            in_table_list = False
+            expect_table = False
             index += 1
             continue
-        normalized = table.strip("`").lower()
-        if normalized not in allowed | ctes:
-            raise SqlGuardError("table_not_allowed")
-        index += 2
+        if expect_table:
+            if token != "(":
+                normalized = token.strip("`").lower()
+                if normalized not in allowed | ctes:
+                    raise SqlGuardError("table_not_allowed")
+            expect_table = False
+        elif in_table_list and token == ",":
+            expect_table = True
+        index += 1
+    if expect_table:
+        raise SqlGuardError("table_reference_required")
 
 
 def _cte_names(tokens: list[str]) -> set[str]:
