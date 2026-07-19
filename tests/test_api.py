@@ -1,8 +1,10 @@
 from fastapi.testclient import TestClient
 import pandas as pd
+from types import SimpleNamespace
 
 from backend.app.agents.supervisor import EcommerceSupervisor
 from backend.app.api import _import_recovery, create_app
+from backend.app.services.import_service import ImportReport
 
 
 def test_health_and_knowledge_question_are_available_over_http():
@@ -176,3 +178,30 @@ def test_duplicate_import_is_a_reusable_existing_dataset():
     assert response is not None
     assert response["status"] == "already_imported"
     assert response["processed_tables"] == ["order_info"]
+
+
+def test_import_endpoint_passes_batch_size_by_keyword(monkeypatch):
+    captured = {}
+
+    class FakeImportService:
+        def __init__(self, engine, *, batch_size):
+            captured["batch_size"] = batch_size
+
+        def import_file(self, path, table):
+            return ImportReport(1, ["behavior_funnel"], 1, 0, [])
+
+    monkeypatch.setattr(
+        "backend.app.api.Settings",
+        lambda: SimpleNamespace(database_url="sqlite://", import_batch_size=321),
+    )
+    monkeypatch.setattr("backend.app.api.create_engine", lambda url: object())
+    monkeypatch.setattr("backend.app.api.ImportService", FakeImportService)
+    client = TestClient(create_app(EcommerceSupervisor()))
+
+    response = client.post(
+        "/api/imports", files={"file": ("data.csv", b"total_pages_visited\n1\n", "text/csv")}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["processed_tables"] == ["behavior_funnel"]
+    assert captured["batch_size"] == 321

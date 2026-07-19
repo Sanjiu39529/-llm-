@@ -100,7 +100,10 @@ def main() -> None:
     if submission:
         text = submission.text.strip()
         files = list(submission.files)
-        content = text or "已发送文件：" + "、".join(file.name for file in files)
+        filenames = "、".join(file.name for file in files)
+        content = text
+        if filenames:
+            content = f"{text}\n\n附件：{filenames}" if text else f"已发送文件：{filenames}"
         st.session_state.chat_history.append({"role": "user", "content": content})
         with st.chat_message("user"):
             st.write(content)

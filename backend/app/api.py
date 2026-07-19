@@ -156,7 +156,9 @@ def create_app(
             try:
                 settings = Settings()
                 engine = create_engine(settings.database_url)
-                report = ImportService(engine, settings.import_batch_size).import_file(path, table)
+                report = ImportService(
+                    engine, batch_size=settings.import_batch_size
+                ).import_file(path, table)
             except ValueError as exc:
                 recovery = _import_recovery(str(exc))
                 if recovery is not None:
