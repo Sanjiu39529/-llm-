@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -44,6 +45,7 @@ class DashboardQuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     start: datetime | None = None
     end: datetime | None = None
+    context_tables: list[str] = Field(default_factory=list)
 
 
 def create_app(
@@ -73,9 +75,10 @@ def create_app(
     @app.post("/api/dashboard/ask")
     def dashboard_question(request: DashboardQuestionRequest) -> dict[str, Any]:
         """Route a natural-language question to a fixed, display-safe dashboard."""
-        intent = _dashboard_intent(request.question)
+        context_tables = [name for name in request.context_tables if name in STANDARD_TABLES]
+        intent = _dashboard_intent(request.question, context_tables)
         if intent == "knowledge":
-            result = agent.run(request.question)
+            result = agent.run(f"知识库解释：{request.question}")
             return jsonable_encoder(
                 {
                     "intent": intent,
@@ -161,9 +164,16 @@ def create_app(
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except SQLAlchemyError as exc:
                 logger.exception("导入时数据库不可用或数据表缺失")
-                raise HTTPException(
-                    status_code=503, detail="database_unavailable_or_schema_missing"
-                ) from exc
+                return {
+                    "status": "database_requires_attention",
+                    "message": "文件已接收，但数据库连接或数据表尚未就绪。请运行数据库初始化后重新发送。",
+                }
+            except Exception:
+                logger.exception("导入出现未预期异常")
+                return {
+                    "status": "import_requires_attention",
+                    "message": "文件已接收，但本次导入没有完成。请确认文件可正常打开、首行为字段名，然后重新发送。",
+                }
         return {
             **asdict(report),
             "auto_detected": table is None,
@@ -209,10 +219,19 @@ def _import_recovery(detail: str) -> dict[str, Any] | None:
             "status": "needs_csv_confirmation",
             "message": "Excel 已读取，但没有可安全识别的工作表。请将需要导入的一个工作表另存为 CSV 后重新发送。",
         }
+    if detail.startswith("cross_batch_duplicate"):
+        match = re.search(r"table=([a-z_]+)", detail)
+        table_name = match.group(1) if match else None
+        return {
+            "status": "already_imported",
+            "message": "该文件中的业务数据已经存在，无需重复写入；可以直接继续提问分析。",
+            "processed_tables": [table_name] if table_name in STANDARD_TABLES else [],
+            "written_rows": 0,
+        }
     return None
 
 
-def _dashboard_intent(question: str) -> str:
+def _dashboard_intent(question: str, context_tables: list[str] | None = None) -> str:
     """Classify only the presentation path; business metric formulas stay unchanged."""
     normalized = question.lower()
     if any(word in normalized for word in ("口径", "定义", "规则", "怎么算", "如何计算", "是什么")):
@@ -223,6 +242,11 @@ def _dashboard_intent(question: str) -> str:
         word in normalized
         for word in ("gmv", "销售", "营收", "订单", "退款", "roi", "投放", "流量", "转化", "客单")
     ):
+        return "analysis"
+    tables = set(context_tables or [])
+    if "behavior_funnel" in tables:
+        return "funnel"
+    if tables:
         return "analysis"
     return "knowledge"
 

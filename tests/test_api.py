@@ -136,3 +136,43 @@ def test_unknown_file_structure_returns_guided_confirmation_instead_of_import_er
     assert response is not None
     assert response["status"] == "needs_table_confirmation"
     assert "order_info" in response["available_tables"]
+
+
+def test_generic_analysis_question_uses_uploaded_funnel_context():
+    client = TestClient(
+        create_app(
+            EcommerceSupervisor(),
+            table_loader=lambda: {
+                "behavior_funnel": pd.DataFrame(
+                    [{"total_pages_visited": 2, "home_page": 1, "confirmation_page": 0}]
+                )
+            },
+        )
+    )
+
+    response = client.post(
+        "/api/dashboard/ask",
+        json={"question": "帮我分析该数据", "context_tables": ["behavior_funnel"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "funnel"
+    assert response.json().get("error") is None
+
+
+def test_generic_question_without_context_never_returns_analysis_inputs_required():
+    client = TestClient(create_app(EcommerceSupervisor()))
+
+    response = client.post("/api/dashboard/ask", json={"question": "你好"})
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "knowledge"
+    assert response.json().get("error") != "analysis_inputs_required"
+
+
+def test_duplicate_import_is_a_reusable_existing_dataset():
+    response = _import_recovery("cross_batch_duplicate: table=order_info count=3")
+
+    assert response is not None
+    assert response["status"] == "already_imported"
+    assert response["processed_tables"] == ["order_info"]

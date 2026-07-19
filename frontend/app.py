@@ -104,11 +104,21 @@ def main() -> None:
         st.session_state.chat_history.append({"role": "user", "content": content})
         with st.chat_message("user"):
             st.write(content)
+        context_tables: list[str] = []
+        pending_import = False
         for upload in files:
-            _append_import_message(api_url, upload.name, upload.getvalue())
-        if text:
+            import_result = _append_import_message(api_url, upload.name, upload.getvalue())
+            context_tables.extend(import_result.get("processed_tables", []))
+            pending_import = pending_import or import_result.get("status") in {
+                "needs_table_confirmation", "needs_csv_confirmation",
+                "database_requires_attention", "import_requires_attention",
+            }
+        if text and not pending_import:
             try:
-                result = _post_json(f"{api_url}/api/dashboard/ask", {"question": text})
+                result = _post_json(
+                    f"{api_url}/api/dashboard/ask",
+                    {"question": text, "context_tables": sorted(set(context_tables))},
+                )
             except (URLError, TimeoutError, RuntimeError) as exc:
                 result = {"error": f"暂时无法连接分析服务：{exc}"}
             message = {"role": "assistant", "content": {"kind": "dashboard", "data": result}}
@@ -117,11 +127,11 @@ def main() -> None:
             st.session_state.chat_history.append(message)
 
 
-def _append_import_message(api_url: str, filename: str, content: bytes) -> None:
+def _append_import_message(api_url: str, filename: str, content: bytes) -> dict[str, Any]:
     try:
         result = _post_file(f"{api_url}/api/imports", filename, content, None)
     except (URLError, TimeoutError, RuntimeError) as exc:
-        result = {"status": "service_unavailable", "message": f"暂时无法连接导入服务：{exc}"}
+        result = {"status": "import_requires_attention", "message": f"导入服务暂时没有完成请求：{exc}"}
     upload_id = uuid4().hex
     if result.get("status") == "needs_table_confirmation":
         st.session_state.pending_uploads[upload_id] = {"filename": filename, "content": content}
@@ -129,6 +139,7 @@ def _append_import_message(api_url: str, filename: str, content: bytes) -> None:
     with st.chat_message("assistant", avatar=":material/smart_toy:"):
         _show_assistant_message(message, api_url)
     st.session_state.chat_history.append(message)
+    return result
 
 
 def _show_assistant_message(message: dict[str, Any], api_url: str) -> None:
@@ -167,8 +178,11 @@ def _show_import_answer(message: dict[str, Any], api_url: str) -> None:
     if status == "needs_csv_confirmation":
         st.write(result["message"])
         return
-    if status == "service_unavailable":
+    if status in {"database_requires_attention", "import_requires_attention"}:
         st.warning(result["message"])
+        return
+    if status == "already_imported":
+        st.info(result["message"])
         return
     detected = "、".join(result.get("processed_tables", []))
     st.success(f"已完成导入：{detected}，写入 {result.get('written_rows', 0)} 行。")
