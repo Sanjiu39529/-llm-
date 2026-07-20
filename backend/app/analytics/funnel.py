@@ -30,7 +30,7 @@ def build_funnel_report(frame: pd.DataFrame | None) -> dict[str, Any]:
             }
         )
         previous = visitors
-    return {
+    report = {
         "available": True,
         "visitors": int(len(frame)),
         "new_user_ratio": _ratio(frame.get("new_user")),
@@ -38,6 +38,19 @@ def build_funnel_report(frame: pd.DataFrame | None) -> dict[str, Any]:
         "source_conversion": _conversion_by(frame, "source"),
         "device_conversion": _conversion_by(frame, "device"),
     }
+    report["analysis_summary"] = _summary(report)
+    return report
+
+
+def _summary(report: dict[str, Any]) -> dict[str, object]:
+    stages = report["funnel"]
+    confirmation = next(item for item in stages if item["stage"] == "确认页")
+    findings = [f"本次漏斗包含 {report['visitors']} 位匿名访客。"]
+    if confirmation["conversion_from_previous"] is not None:
+        findings.append(
+            f"确认页访客为 {confirmation['visitors']}，相对支付页转化率为 {confirmation['conversion_from_previous']:.1%}。"
+        )
+    return {"overview": findings[0], "findings": findings, "limitations": []}
 
 
 def _ratio(values: pd.Series | None) -> float | None:

@@ -134,10 +134,11 @@ def create_app(
         )
         if report.error:
             raise HTTPException(status_code=422, detail=report.error)
+        summary = report.report.get("analysis_summary", {}) if report.report else {}
         return jsonable_encoder(
             {
                 "intent": intent,
-                "answer": "已按固定指标口径生成经营分析看板。未提供统计时间时默认展示最近 30 天。",
+                "answer": summary.get("overview", "已按固定指标口径生成经营分析看板。"),
                 "dashboard": report.report,
                 "trace": report.trace,
                 "run_id": report.run_id,

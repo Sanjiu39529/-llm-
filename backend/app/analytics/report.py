@@ -50,11 +50,56 @@ def build_analysis_report(
     return {
         "metrics": metrics,
         "charts": charts,
+        "analysis_summary": _analysis_summary(sales, users, products, comparisons, missing),
         "missing_dependencies": missing,
         "quality_warnings": warnings,
         "valuable_anomalies": anomalies,
         "recommendations": _recommendations(sales, users, ads, anomalies),
     }
+
+
+def _analysis_summary(
+    sales: Mapping[str, MetricResult],
+    users: Mapping[str, object],
+    products: Mapping[str, object],
+    comparisons: Mapping[str, object],
+    missing: list[str],
+) -> dict[str, object]:
+    """由确定性指标组织可追溯文字结论，绝不自行计算或补造数值。"""
+    findings: list[str] = []
+    gmv = sales["gmv"]
+    if gmv.available:
+        findings.append(f"统计期成交 GMV 为 {_format_value(gmv.value)}。")
+    net_sales = sales["net_sales"]
+    if net_sales.available:
+        findings.append(f"净销售额为 {_format_value(net_sales.value)}。")
+    day = comparisons.get("day")
+    if isinstance(day, MetricResult) and day.available and day.change is not None:
+        direction = "增长" if day.change >= 0 else "下降"
+        findings.append(f"GMV 较上一日{direction} {abs(float(day.change)):.1%}。")
+    channels = users.get("channels")
+    if isinstance(channels, Mapping):
+        available_channels = [
+            (name, values) for name, values in channels.items()
+            if isinstance(values, Mapping) and values.get("available")
+        ]
+        if available_channels:
+            top_name, top_values = max(available_channels, key=lambda item: item[1].get("uv", 0))
+            findings.append(f"UV 最高的渠道是 {top_name}（{top_values['uv']}）。")
+    ranking = products.get("top_by_revenue", {})
+    if isinstance(ranking, Mapping) and ranking.get("items"):
+        top = ranking["items"][0]
+        label = top.get("product_name") or top.get("product_id")
+        findings.append(f"销售额最高的商品是 {label}（{_format_value(top.get('revenue'))}）。")
+    overview = findings[0] if findings else "当前数据未满足可计算指标的必要条件。"
+    return {"overview": overview, "findings": findings, "limitations": missing}
+
+
+def _format_value(value: object) -> str:
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _missing_dependencies(metrics: Mapping[str, object]) -> list[str]:

@@ -29,6 +29,7 @@ def test_report_keeps_sales_and_cancels_missing_traffic_and_ad_charts() -> None:
     assert report["charts"]["ad_efficiency"]["cancelled"] is True
     assert "traffic_visit" in report["missing_dependencies"]
     assert "ads_info" in report["missing_dependencies"]
+    assert report["analysis_summary"]["overview"] == "统计期成交 GMV 为 10.00。"
 
 
 def test_report_returns_structured_charts_for_complete_inputs() -> None:

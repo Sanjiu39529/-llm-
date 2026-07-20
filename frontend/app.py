@@ -279,6 +279,7 @@ def _show_dashboard_answer(result: dict[str, Any]) -> None:
 
 
 def _show_report(report: dict[str, Any]) -> None:
+    _show_analysis_summary(report.get("analysis_summary", {}))
     sales = report.get("metrics", {}).get("sales", {})
     labels = {"gmv": "成交 GMV", "actual_sales": "实际销售额", "net_sales": "净销售额", "refund_amount": "退款金额"}
     available = {
@@ -366,6 +367,7 @@ def _show_funnel(report: dict[str, Any]) -> None:
     if not report.get("available"):
         st.info("尚未导入用户行为漏斗数据。")
         return
+    _show_analysis_summary(report.get("analysis_summary", {}))
     with st.container(horizontal=True):
         st.metric("匿名访客数", report["visitors"], border=True)
         ratio = report.get("new_user_ratio")
@@ -389,6 +391,19 @@ def _show_funnel(report: dict[str, Any]) -> None:
         with st.container(border=True):
             st.subheader("来源渠道确认页转化")
             st.bar_chart(dimensions, x="dimension", y="confirmation_rate")
+
+
+def _show_analysis_summary(summary: dict[str, Any]) -> None:
+    if not summary:
+        return
+    with st.container(border=True):
+        st.subheader("分析结论")
+        st.write(summary.get("overview", "未得到可解释的分析结论。"))
+        for finding in summary.get("findings", [])[1:]:
+            st.write(f":material/arrow_right: {finding}")
+        limitations = summary.get("limitations", [])
+        if limitations:
+            st.caption("数据限制：缺少 " + "、".join(limitations))
 
 
 if __name__ == "__main__":

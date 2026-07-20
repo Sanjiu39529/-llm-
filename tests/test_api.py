@@ -130,6 +130,7 @@ def test_dashboard_question_routes_sales_question_to_fixed_metric_report():
     assert response.status_code == 200
     assert response.json()["intent"] == "analysis"
     assert response.json()["dashboard"]["metrics"]["sales"]["gmv"]["value"] == 100.0
+    assert response.json()["answer"] == "统计期成交 GMV 为 100.00。"
 
 
 def test_dashboard_question_scopes_database_load_to_selected_datasets(monkeypatch):

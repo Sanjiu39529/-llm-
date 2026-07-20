@@ -68,3 +68,14 @@ _show_report({
 
     assert not app.exception
     assert len(app.metric) == 4
+
+
+def test_frontend_renders_deterministic_analysis_summary() -> None:
+    script = '''
+from frontend.app import _show_analysis_summary
+_show_analysis_summary({"overview": "成交 GMV 为 100.00。", "findings": ["成交 GMV 为 100.00。", "净销售额为 90.00。"], "limitations": ["traffic_visit"]})
+'''
+    app = AppTest.from_string(script).run()
+
+    assert not app.exception
+    assert any("分析结论" in item.value for item in app.subheader)
