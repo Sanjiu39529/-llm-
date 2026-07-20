@@ -280,6 +280,12 @@ def _show_dashboard_answer(result: dict[str, Any]) -> None:
 
 def _show_report(report: dict[str, Any]) -> None:
     _show_analysis_summary(report.get("analysis_summary", {}))
+    selected_charts = set(
+        report.get("presentation", {}).get(
+            "selected_chart_keys",
+            ["sales_overview", "traffic_overview", "product_ranking", "ad_efficiency"],
+        )
+    )
     sales = report.get("metrics", {}).get("sales", {})
     labels = {"gmv": "成交 GMV", "actual_sales": "实际销售额", "net_sales": "净销售额", "refund_amount": "退款金额"}
     available = {
@@ -300,7 +306,7 @@ def _show_report(report: dict[str, Any]) -> None:
                 delta=delta,
                 border=True,
             )
-    if available:
+    if available and "sales_overview" in selected_charts:
         chart = pd.DataFrame(
             {
                 "指标": [labels[name] for name in available],
@@ -319,13 +325,12 @@ def _show_report(report: dict[str, Any]) -> None:
     ]
     products = report.get("metrics", {}).get("products", {})
     ranking = products.get("top_by_revenue", {}).get("items", [])
-    left, right = st.columns(2)
-    if channels:
-        with left.container(border=True, height="stretch"):
+    if channels and "traffic_overview" in selected_charts:
+        with st.container(border=True):
             st.subheader("渠道流量")
             st.bar_chart(pd.DataFrame(channels), x="渠道", y=["UV", "PV"])
-    if ranking:
-        with right.container(border=True, height="stretch"):
+    if ranking and "product_ranking" in selected_charts:
+        with st.container(border=True):
             st.subheader("商品销售排行")
             st.dataframe(
                 pd.DataFrame(ranking),
@@ -335,6 +340,8 @@ def _show_report(report: dict[str, Any]) -> None:
                     "quantity": st.column_config.NumberColumn("销量"),
                 },
             )
+    if "ad_efficiency" in selected_charts:
+        _show_ad_efficiency(report.get("metrics", {}).get("advertising", {}))
     if report.get("valuable_anomalies"):
         with st.container(border=True):
             st.subheader("值得复核的异常", help="异常记录不会在清洗阶段被擅自删除")
@@ -361,6 +368,20 @@ def _format_metric(value: object) -> str:
         return f"{float(value):,.2f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _show_ad_efficiency(advertising: dict[str, Any]) -> None:
+    channels = advertising.get("channels", {})
+    rows = [
+        {"渠道": name, "投放花费": values["cost"]["value"]}
+        for name, values in channels.items()
+        if values.get("available") and values.get("cost", {}).get("value") is not None
+    ]
+    if not rows:
+        return
+    with st.container(border=True):
+        st.subheader("渠道投放花费")
+        st.bar_chart(pd.DataFrame(rows), x="渠道", y="投放花费")
 
 
 def _show_funnel(report: dict[str, Any]) -> None:

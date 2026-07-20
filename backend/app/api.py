@@ -22,6 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.agents.supervisor import EcommerceSupervisor
 from backend.app.analytics.config import MetricConfig
 from backend.app.analytics.funnel import build_funnel_report
+from backend.app.analytics.presentation import select_chart_keys
 from backend.app.config import Settings
 from backend.app.database.analysis_repository import AnalysisRepository
 from backend.app.datasources.base import STANDARD_TABLES
@@ -134,12 +135,16 @@ def create_app(
         )
         if report.error:
             raise HTTPException(status_code=422, detail=report.error)
-        summary = report.report.get("analysis_summary", {}) if report.report else {}
+        dashboard = dict(report.report or {})
+        dashboard["presentation"] = select_chart_keys(
+            request.question, dashboard.get("charts", {})
+        )
+        summary = dashboard.get("analysis_summary", {})
         return jsonable_encoder(
             {
                 "intent": intent,
                 "answer": summary.get("overview", "已按固定指标口径生成经营分析看板。"),
-                "dashboard": report.report,
+                "dashboard": dashboard,
                 "trace": report.trace,
                 "run_id": report.run_id,
                 "trace_events": report.trace_events,

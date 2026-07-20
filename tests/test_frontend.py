@@ -79,3 +79,18 @@ _show_analysis_summary({"overview": "成交 GMV 为 100.00。", "findings": ["�
 
     assert not app.exception
     assert any("分析结论" in item.value for item in app.subheader)
+
+
+def test_frontend_only_renders_question_selected_chart() -> None:
+    script = '''
+from frontend.app import _show_report
+_show_report({"presentation": {"selected_chart_keys": ["sales_overview"]}, "metrics": {"sales": {"gmv": {"value": 100, "available": True}, "actual_sales": {"value": None, "available": False}, "net_sales": {"value": None, "available": False}, "refund_amount": {"value": None, "available": False}}, "gmv_comparisons": {"day": {}}, "traffic_and_customer": {"channels": {}}, "products": {"top_by_revenue": {"items": []}}, "advertising": {}}, "valuable_anomalies": [], "recommendations": [], "missing_dependencies": [], "quality_warnings": {}})
+'''
+    app = AppTest.from_string(script).run()
+
+    assert not app.exception
+    labels = [item.value for item in app.subheader]
+    assert "销售结构" in labels
+    assert "渠道流量" not in labels
+    assert "商品销售排行" not in labels
+    assert "渠道投放花费" not in labels
