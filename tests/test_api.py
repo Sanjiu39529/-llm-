@@ -134,6 +134,28 @@ def test_dashboard_question_routes_sales_question_to_fixed_metric_report():
     assert response.json()["dashboard"]["presentation"]["selected_chart_keys"] == ["sales_overview"]
 
 
+def test_dashboard_question_uses_injected_llm_planner_for_grounded_suggestions():
+    class FakePlanner:
+        def plan(self, question, context):
+            from backend.app.analytics.presentation import AnalysisPlan
+            return AnalysisPlan(
+                selected_chart_keys=["sales_overview"],
+                reasoning_summary="销售数据可用。",
+                business_suggestions=["复核退款原因后再调整策略。"],
+            )
+
+    client = TestClient(create_app(
+        EcommerceSupervisor(),
+        table_loader=lambda: {"order_info": pd.DataFrame([{"order_id": "o1", "order_time": pd.Timestamp("2026-01-01"), "order_amount": "100"}])},
+        analysis_planner=FakePlanner(),
+    ))
+
+    response = client.post("/api/dashboard/ask", json={"question": "查看 GMV", "start": "2026-01-01T00:00:00", "end": "2026-01-02T00:00:00"})
+
+    assert response.json()["dashboard"]["presentation"]["planner"] == "llm"
+    assert response.json()["dashboard"]["presentation"]["business_suggestions"] == ["复核退款原因后再调整策略。"]
+
+
 def test_dashboard_question_scopes_database_load_to_selected_datasets(monkeypatch):
     captured = {}
 

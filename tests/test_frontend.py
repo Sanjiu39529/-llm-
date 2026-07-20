@@ -94,3 +94,14 @@ _show_report({"presentation": {"selected_chart_keys": ["sales_overview"]}, "metr
     assert "渠道流量" not in labels
     assert "商品销售排行" not in labels
     assert "渠道投放花费" not in labels
+
+
+def test_frontend_renders_llm_business_suggestions() -> None:
+    script = '''
+from frontend.app import _show_planner_suggestions
+_show_planner_suggestions({"business_suggestions": ["先核查退款原因。"]})
+'''
+    app = AppTest.from_string(script).run()
+
+    assert not app.exception
+    assert any("AI 业务建议" in item.value for item in app.subheader)

@@ -22,7 +22,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.agents.supervisor import EcommerceSupervisor
 from backend.app.analytics.config import MetricConfig
 from backend.app.analytics.funnel import build_funnel_report
-from backend.app.analytics.presentation import select_chart_keys
+from backend.app.analytics.presentation import (
+    AnalysisPlanner,
+    OpenAICompatibleAnalysisPlanner,
+    plan_presentation,
+)
 from backend.app.config import Settings
 from backend.app.database.analysis_repository import AnalysisRepository
 from backend.app.datasources.base import STANDARD_TABLES
@@ -58,9 +62,11 @@ class DashboardQuestionRequest(BaseModel):
 def create_app(
     supervisor: EcommerceSupervisor | None = None,
     table_loader: Callable[[], Mapping[str, pd.DataFrame]] | None = None,
+    analysis_planner: AnalysisPlanner | None = None,
 ) -> FastAPI:
     app = FastAPI(title="电商智能数据分析助手", version="0.1.0")
     agent = supervisor or _configured_supervisor()
+    planner = analysis_planner or _configured_analysis_planner()
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -136,9 +142,7 @@ def create_app(
         if report.error:
             raise HTTPException(status_code=422, detail=report.error)
         dashboard = dict(report.report or {})
-        dashboard["presentation"] = select_chart_keys(
-            request.question, dashboard.get("charts", {})
-        )
+        dashboard["presentation"] = plan_presentation(request.question, dashboard, planner)
         summary = dashboard.get("analysis_summary", {})
         return jsonable_encoder(
             {
@@ -291,6 +295,21 @@ def _configured_supervisor() -> EcommerceSupervisor:
             )
         )
     return EcommerceSupervisor()
+
+
+def _configured_analysis_planner() -> AnalysisPlanner | None:
+    try:
+        settings = Settings()
+    except ValidationError:
+        return None
+    base_url = getattr(settings, "llm_base_url", None)
+    api_key = getattr(settings, "llm_api_key", None)
+    model = getattr(settings, "llm_model", None)
+    if all((base_url, api_key, model)):
+        return OpenAICompatibleAnalysisPlanner(
+            base_url, api_key, model
+        )
+    return None
 
 
 def _import_recovery(detail: str) -> dict[str, Any] | None:

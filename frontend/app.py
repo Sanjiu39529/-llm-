@@ -280,6 +280,7 @@ def _show_dashboard_answer(result: dict[str, Any]) -> None:
 
 def _show_report(report: dict[str, Any]) -> None:
     _show_analysis_summary(report.get("analysis_summary", {}))
+    _show_planner_suggestions(report.get("presentation", {}))
     selected_charts = set(
         report.get("presentation", {}).get(
             "selected_chart_keys",
@@ -425,6 +426,17 @@ def _show_analysis_summary(summary: dict[str, Any]) -> None:
         limitations = summary.get("limitations", [])
         if limitations:
             st.caption("数据限制：缺少 " + "、".join(limitations))
+
+
+def _show_planner_suggestions(presentation: dict[str, Any]) -> None:
+    suggestions = presentation.get("business_suggestions", [])
+    if not suggestions:
+        return
+    with st.container(border=True):
+        st.subheader("AI 业务建议")
+        st.caption("建议仅基于本次已计算结论生成；请结合业务背景确认后执行。")
+        for suggestion in suggestions:
+            st.write(f":material/lightbulb: {suggestion}")
 
 
 if __name__ == "__main__":
