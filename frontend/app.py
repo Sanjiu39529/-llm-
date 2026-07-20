@@ -222,6 +222,21 @@ def _show_import_answer(message: dict[str, Any], api_url: str) -> None:
     if status == "needs_csv_confirmation":
         st.write(result["message"])
         return
+    if status == "generic_analysis":
+        dashboard = result["dashboard"]
+        st.success(result["message"])
+        st.caption(dashboard["notice"])
+        with st.container(horizontal=True):
+            st.metric("预估销售额", _format_metric(dashboard["metrics"]["estimated_sales"]), border=True)
+            st.metric("累计销量", _format_metric(dashboard["metrics"]["total_sales_count"]), border=True)
+        if dashboard["top_stores"]:
+            with st.container(border=True):
+                st.subheader("店铺预估销售额排行")
+                st.bar_chart(pd.DataFrame(dashboard["top_stores"]), x="store", y="estimated_sales")
+        with st.container(border=True):
+            st.subheader("商品预估销售额排行")
+            st.dataframe(pd.DataFrame(dashboard["top_products"]), hide_index=True)
+        return
     if status in {"database_requires_attention", "import_requires_attention"}:
         st.warning(result["message"])
         return

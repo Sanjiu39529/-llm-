@@ -238,6 +238,14 @@ def test_duplicate_import_is_a_reusable_existing_dataset():
     assert response["processed_tables"] == ["order_info"]
 
 
+def test_import_endpoint_analyzes_generic_sales_snapshot_without_standard_table(monkeypatch):
+    monkeypatch.setattr("backend.app.api.Settings", lambda: SimpleNamespace(database_url="sqlite://", import_max_file_size_mb=2))
+    client = TestClient(create_app(EcommerceSupervisor()))
+    response = client.post("/api/imports", files={"file": ("sales.csv", b"id,title,price,sale_count,\xe5\xba\x97\xe5\x90\x8d\n1,A,10,3,S\n", "text/csv")})
+    assert response.json()["status"] == "generic_analysis"
+    assert response.json()["dashboard"]["metrics"]["estimated_sales"] == 30.0
+
+
 def test_import_endpoint_passes_batch_size_by_keyword(monkeypatch):
     captured = {}
 

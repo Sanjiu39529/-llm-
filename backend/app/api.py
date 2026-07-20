@@ -22,6 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.agents.supervisor import EcommerceSupervisor
 from backend.app.analytics.config import MetricConfig
 from backend.app.analytics.funnel import build_funnel_report
+from backend.app.analytics.generic_sales_snapshot import analyze_generic_sales_snapshot
 from backend.app.analytics.presentation import (
     AnalysisPlanner,
     OpenAICompatibleAnalysisPlanner,
@@ -219,6 +220,10 @@ def create_app(
                     path,
                     max_bytes=settings.import_max_file_size_mb * 1024 * 1024,
                 )
+                if table is None and suffix == ".csv":
+                    generic = analyze_generic_sales_snapshot(path)
+                    if generic is not None:
+                        return {"status": "generic_analysis", "message": "已识别为通用商品销售快照，未强制映射到标准表。", "dashboard": generic}
                 engine = create_engine(settings.database_url)
                 report = ImportService(
                     engine,
