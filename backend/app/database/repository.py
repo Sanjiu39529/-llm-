@@ -1,6 +1,7 @@
 """文件导入所需的数据库写入操作。"""
 
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -9,6 +10,16 @@ import pandas as pd
 from sqlalchemy import Connection, text
 
 from backend.app.datasources.base import TABLE_CONTRACTS
+
+
+@dataclass(frozen=True, slots=True)
+class ExistingImport:
+    batch_id: int
+    dataset_id: str
+    table_names: list[str]
+    processed_rows: int
+    written_rows: int
+    skipped_rows: int
 
 
 class ImportRepository:
@@ -26,18 +37,27 @@ class ImportRepository:
         table_names: list[str],
         field_mapping: dict[str, dict[str, str]],
         quality_summary: dict[str, Any] | None = None,
+        *,
+        dataset_id: str,
+        file_hash: str | None = None,
+        file_size: int | None = None,
     ) -> int:
         result = connection.execute(
             text(
                 """
                 INSERT INTO import_batch
-                    (source_name, table_name, status, field_mapping, quality_summary)
+                    (dataset_id, source_name, file_hash, file_size, table_name,
+                     status, field_mapping, quality_summary)
                 VALUES
-                    (:source_name, :table_name, :status, :field_mapping, :quality_summary)
+                    (:dataset_id, :source_name, :file_hash, :file_size, :table_name,
+                     :status, :field_mapping, :quality_summary)
                 """
             ),
             {
+                "dataset_id": dataset_id,
                 "source_name": source_name,
+                "file_hash": file_hash,
+                "file_size": file_size,
                 "table_name": table_names[0] if len(table_names) == 1 else "multiple",
                 "status": "processing",
                 "field_mapping": json.dumps(field_mapping, ensure_ascii=False),
@@ -47,6 +67,42 @@ class ImportRepository:
         if result.lastrowid is None:
             raise RuntimeError("创建导入批次后未获得批次 ID")
         return int(result.lastrowid)
+
+    def find_completed_by_hash(
+        self, connection: Connection, file_hash: str
+    ) -> ExistingImport | None:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, dataset_id, field_mapping, processed_rows,
+                       written_rows, skipped_rows
+                FROM import_batch
+                WHERE file_hash = :file_hash AND status = 'completed'
+                LIMIT 1
+                """
+            ),
+            {"file_hash": file_hash},
+        ).mappings().first()
+        if row is None:
+            return None
+        connection.execute(
+            text(
+                "UPDATE import_batch SET last_accessed_at = :accessed_at WHERE id = :batch_id"
+            ),
+            {
+                "accessed_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+                "batch_id": row["id"],
+            },
+        )
+        mapping = json.loads(row["field_mapping"] or "{}")
+        return ExistingImport(
+            batch_id=int(row["id"]),
+            dataset_id=str(row["dataset_id"]),
+            table_names=list(mapping),
+            processed_rows=int(row["processed_rows"] or 0),
+            written_rows=int(row["written_rows"] or 0),
+            skipped_rows=int(row["skipped_rows"] or 0),
+        )
 
     def write_frame(
         self,
@@ -145,6 +201,10 @@ class ImportRepository:
         connection: Connection,
         batch_id: int,
         quality_summary: dict[str, dict[str, Any]],
+        *,
+        processed_rows: int,
+        written_rows: int,
+        skipped_rows: int,
     ) -> None:
         connection.execute(
             text(
@@ -152,6 +212,9 @@ class ImportRepository:
                 UPDATE import_batch
                 SET status = :status,
                     quality_summary = :quality_summary,
+                    processed_rows = :processed_rows,
+                    written_rows = :written_rows,
+                    skipped_rows = :skipped_rows,
                     completed_at = :completed_at
                 WHERE id = :batch_id
                 """
@@ -159,6 +222,9 @@ class ImportRepository:
             {
                 "status": "completed",
                 "quality_summary": json.dumps(quality_summary, ensure_ascii=False),
+                "processed_rows": processed_rows,
+                "written_rows": written_rows,
+                "skipped_rows": skipped_rows,
                 "completed_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
                 "batch_id": batch_id,
             },
@@ -175,7 +241,7 @@ class ImportRepository:
             text(
                 """
                 UPDATE import_batch
-                SET status = :status, error_code = :error_code,
+                SET status = :status, error_code = :error_code, file_hash = NULL,
                     quality_summary = :quality_summary, completed_at = :completed_at
                 WHERE id = :batch_id
                 """

@@ -114,6 +114,27 @@ def test_schema_enforces_payment_and_refund_business_keys() -> None:
     assert "UNIQUE KEY uq_refund_info_business_key (order_id, refunded_at, refund_amount)" in sql
 
 
+def test_schema_tracks_dataset_identity_and_import_counts() -> None:
+    sql = Path("sql/001_schema.sql").read_text(encoding="utf-8")
+    for fragment in (
+        "dataset_id CHAR(36) NOT NULL",
+        "file_hash CHAR(64) NULL",
+        "file_size BIGINT UNSIGNED NULL",
+        "processed_rows BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        "written_rows BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        "skipped_rows BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        "UNIQUE KEY uq_import_batch_file_hash (file_hash)",
+        "last_accessed_at DATETIME NULL",
+    ):
+        assert fragment in sql
+
+
+def test_dataset_identity_migration_backfills_legacy_batches() -> None:
+    migration = Path("sql/005_import_dataset_identity.sql").read_text(encoding="utf-8")
+    assert "SET dataset_id = UUID()" in migration
+    assert "ADD UNIQUE KEY uq_import_batch_file_hash (file_hash)" in migration
+
+
 def test_integrity_upgrade_migration_contains_all_phase_one_additions() -> None:
     migration = Path("sql/002_phase1_integrity_upgrade.sql").read_text(encoding="utf-8")
     assert "重复 ID" in migration and "重复自然键" in migration

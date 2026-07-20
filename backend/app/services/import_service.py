@@ -1,8 +1,10 @@
 """可审计的文件导入编排。"""
 
 from dataclasses import asdict, dataclass
+import hashlib
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import Connection, Engine
 
@@ -22,6 +24,8 @@ class ImportReport:
     written_rows: int
     skipped_rows: int
     missing_tables: list[str]
+    dataset_id: str | None = None
+    reused: bool = False
 
 
 class CrossBatchDuplicateError(ValueError):
@@ -43,9 +47,28 @@ class ImportService:
         self._repository = repository or ImportRepository(batch_size=batch_size)
 
     def import_file(
-        self, path: Path, target_table: str | None = None
+        self,
+        path: Path,
+        target_table: str | None = None,
+        *,
+        file_hash: str | None = None,
+        file_size: int | None = None,
     ) -> ImportReport:
         path = Path(path)
+        file_hash, file_size = _file_identity(path, file_hash, file_size)
+        with self._engine.begin() as connection:
+            existing = self._repository.find_completed_by_hash(connection, file_hash)
+        if existing is not None:
+            return ImportReport(
+                batch_id=existing.batch_id,
+                processed_tables=existing.table_names,
+                written_rows=0,
+                skipped_rows=existing.skipped_rows,
+                missing_tables=sorted(STANDARD_TABLES.difference(existing.table_names)),
+                dataset_id=existing.dataset_id,
+                reused=True,
+            )
+
         frames = self._adapter.read(path, target_table)
         if not frames:
             raise ValueError("文件中未找到可导入的标准表")
@@ -84,8 +107,16 @@ class ImportService:
         }
 
         with self._engine.begin() as connection:
+            dataset_id = str(uuid4())
             batch_id = self._repository.create_batch(
-                connection, path.name, list(frames), mapping_audit, quality_audit
+                connection,
+                path.name,
+                list(frames),
+                mapping_audit,
+                quality_audit,
+                dataset_id=dataset_id,
+                file_hash=file_hash,
+                file_size=file_size,
             )
 
         written_rows = 0
@@ -110,7 +141,15 @@ class ImportService:
                     )
                     for table_name, result in cleaned.items()
                 )
-                self._repository.complete_batch(connection, batch_id, quality_audit)
+                skipped_rows = sum(_skipped_rows(result) for result in cleaned.values())
+                self._repository.complete_batch(
+                    connection,
+                    batch_id,
+                    quality_audit,
+                    processed_rows=sum(len(frame) for frame in frames.values()),
+                    written_rows=written_rows,
+                    skipped_rows=skipped_rows,
+                )
         except Exception:
             with self._engine.begin() as connection:
                 self._repository.fail_batch(
@@ -125,7 +164,22 @@ class ImportService:
             written_rows=written_rows,
             skipped_rows=skipped_rows,
             missing_tables=missing_tables,
+            dataset_id=dataset_id,
         )
+
+
+def _file_identity(
+    path: Path, file_hash: str | None, file_size: int | None
+) -> tuple[str, int]:
+    if file_hash is not None and file_size is not None:
+        return file_hash, file_size
+    digest = hashlib.sha256()
+    measured_size = 0
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+            measured_size += len(chunk)
+    return file_hash or digest.hexdigest(), file_size if file_size is not None else measured_size
 
 
 def _relationship_anomalies(

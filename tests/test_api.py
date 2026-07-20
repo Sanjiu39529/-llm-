@@ -187,7 +187,9 @@ def test_import_endpoint_passes_batch_size_by_keyword(monkeypatch):
         def __init__(self, engine, *, batch_size):
             captured["batch_size"] = batch_size
 
-        def import_file(self, path, table):
+        def import_file(self, path, table, *, file_hash, file_size):
+            captured["file_hash"] = file_hash
+            captured["file_size"] = file_size
             return ImportReport(1, ["behavior_funnel"], 1, 0, [])
 
     monkeypatch.setattr(
@@ -205,3 +207,5 @@ def test_import_endpoint_passes_batch_size_by_keyword(monkeypatch):
     assert response.status_code == 200
     assert response.json()["processed_tables"] == ["behavior_funnel"]
     assert captured["batch_size"] == 321
+    assert len(captured["file_hash"]) == 64
+    assert captured["file_size"] == len(b"total_pages_visited\n1\n")

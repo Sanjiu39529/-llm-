@@ -63,14 +63,21 @@ def _create_import_tables(engine: object, business_ddl: str) -> None:
                 """
                 CREATE TABLE import_batch (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dataset_id TEXT NOT NULL UNIQUE,
                     source_name TEXT NOT NULL,
+                    file_hash TEXT UNIQUE,
+                    file_size INTEGER,
                     table_name TEXT NOT NULL,
                     status TEXT NOT NULL,
                     field_mapping TEXT NOT NULL,
                     quality_summary TEXT NOT NULL,
+                    processed_rows INTEGER NOT NULL DEFAULT 0,
+                    written_rows INTEGER NOT NULL DEFAULT 0,
+                    skipped_rows INTEGER NOT NULL DEFAULT 0,
                     error_code TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    completed_at DATETIME
+                    completed_at DATETIME,
+                    last_accessed_at DATETIME
                 )
                 """
             )
@@ -102,6 +109,36 @@ def test_import_service_returns_auditable_report(tmp_path: Path) -> None:
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT COUNT(*) FROM user_info")) == 1
         assert connection.scalar(text("SELECT status FROM import_batch")) == "completed"
+
+
+def test_import_service_reuses_same_completed_file_without_duplicate_rows(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_import_tables(
+        engine,
+        """
+        CREATE TABLE user_info (
+            user_id TEXT PRIMARY KEY,
+            import_batch_id INTEGER NOT NULL
+        )
+        """,
+    )
+    path = tmp_path / "users.csv"
+    path.write_text("用户ID\nu1\n", encoding="utf-8")
+
+    first = ImportService(engine).import_file(path, target_table="user_info")
+    second = ImportService(engine).import_file(path, target_table="user_info")
+
+    assert first.reused is False
+    assert second.reused is True
+    assert second.dataset_id == first.dataset_id
+    assert second.batch_id == first.batch_id
+    assert second.written_rows == 0
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT COUNT(*) FROM import_batch")) == 1
+        assert connection.scalar(text("SELECT COUNT(*) FROM user_info")) == 1
+        assert connection.scalar(text("SELECT last_accessed_at FROM import_batch")) is not None
 
 
 def test_import_service_rejects_unmapped_required_fields_before_writes(
@@ -223,11 +260,18 @@ def test_repository_uses_bounded_label_for_multi_table_batch() -> None:
                 """
                 CREATE TABLE import_batch (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dataset_id TEXT NOT NULL UNIQUE,
                     source_name TEXT NOT NULL,
+                    file_hash TEXT UNIQUE,
+                    file_size INTEGER,
                     table_name VARCHAR(64) NOT NULL,
                     status TEXT NOT NULL,
                     field_mapping TEXT NOT NULL,
-                    quality_summary TEXT NOT NULL
+                    quality_summary TEXT NOT NULL,
+                    processed_rows INTEGER NOT NULL DEFAULT 0,
+                    written_rows INTEGER NOT NULL DEFAULT 0,
+                    skipped_rows INTEGER NOT NULL DEFAULT 0,
+                    last_accessed_at DATETIME
                 )
                 """
             )
@@ -237,6 +281,7 @@ def test_repository_uses_bounded_label_for_multi_table_batch() -> None:
             "all.xlsx",
             sorted(STANDARD_TABLES),
             {table_name: {} for table_name in STANDARD_TABLES},
+            dataset_id="dataset-1",
         )
 
     with engine.connect() as connection:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timedelta
+import hashlib
 import logging
 from pathlib import Path
 import re
@@ -152,13 +153,15 @@ def create_app(
             raise HTTPException(status_code=400, detail="unsupported_file_type")
         with TemporaryDirectory() as directory:
             path = Path(directory) / filename
-            path.write_bytes(await file.read())
+            file_hash, file_size = await _save_upload(file, path)
             try:
                 settings = Settings()
                 engine = create_engine(settings.database_url)
                 report = ImportService(
                     engine, batch_size=settings.import_batch_size
-                ).import_file(path, table)
+                ).import_file(
+                    path, table, file_hash=file_hash, file_size=file_size
+                )
             except ValueError as exc:
                 recovery = _import_recovery(str(exc))
                 if recovery is not None:
@@ -183,6 +186,18 @@ def create_app(
         }
 
     return app
+
+
+async def _save_upload(file: UploadFile, path: Path) -> tuple[str, int]:
+    """Stream an upload to disk while calculating its stable content identity."""
+    digest = hashlib.sha256()
+    file_size = 0
+    with path.open("wb") as destination:
+        while chunk := await file.read(1024 * 1024):
+            destination.write(chunk)
+            digest.update(chunk)
+            file_size += len(chunk)
+    return digest.hexdigest(), file_size
 
 
 def _frame(rows: list[dict[str, Any]]) -> pd.DataFrame:

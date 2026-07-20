@@ -1,14 +1,23 @@
 -- 电商数据 MySQL 8 模式，所有业务表通过 import_batch_id 保留导入追溯。
 CREATE TABLE IF NOT EXISTS import_batch (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    dataset_id CHAR(36) NOT NULL,
     source_name VARCHAR(255) NOT NULL,
+    file_hash CHAR(64) NULL,
+    file_size BIGINT UNSIGNED NULL,
     table_name VARCHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL,
     field_mapping JSON NOT NULL,
     quality_summary JSON NOT NULL,
+    processed_rows BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    written_rows BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    skipped_rows BIGINT UNSIGNED NOT NULL DEFAULT 0,
     error_code VARCHAR(64) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME NULL,
+    last_accessed_at DATETIME NULL,
+    UNIQUE KEY uq_import_batch_dataset_id (dataset_id),
+    UNIQUE KEY uq_import_batch_file_hash (file_hash),
     INDEX idx_import_batch_table_created (table_name, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
