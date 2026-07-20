@@ -19,6 +19,7 @@ from backend.app.services.cleaning import (
     clean_frame,
     outlier_columns,
 )
+from backend.app.services.dataset_profile import DatasetProfile, infer_dataset_profile
 from backend.app.services.mapping import MappingResult, detect_table, suggest_mapping
 
 
@@ -33,6 +34,7 @@ class ImportReport:
     missing_tables: list[str]
     dataset_id: str | None = None
     reused: bool = False
+    dataset_profiles: dict[str, dict[str, object]] | None = None
 
 
 class CrossBatchDuplicateError(ValueError):
@@ -109,11 +111,26 @@ class ImportService:
                 frame.loc[:, list(mappings[table_name].mapping)].rename(
                     columns=mappings[table_name].mapping
                 ),
+                deduplication_policy=infer_dataset_profile(
+                    table_name,
+                    frame.loc[:, list(mappings[table_name].mapping)].rename(
+                        columns=mappings[table_name].mapping
+                    ),
+                ).deduplication_policy,
             )
             for table_name, frame in frames.items()
         }
         mapping_audit = {
             table_name: result.mapping for table_name, result in mappings.items()
+        }
+        profiles = {
+            table_name: infer_dataset_profile(
+                table_name,
+                frame.loc[:, list(mappings[table_name].mapping)].rename(
+                    columns=mappings[table_name].mapping
+                ),
+            )
+            for table_name, frame in frames.items()
         }
         missing_tables = sorted(STANDARD_TABLES.difference(frames))
         quality_audit: dict[str, Any] = {
@@ -128,6 +145,9 @@ class ImportService:
                 for table_name in frames
             },
             "relationship_anomalies": {},
+            "dataset_profiles": {
+                table_name: profile.to_dict() for table_name, profile in profiles.items()
+            },
         }
 
         with self._engine.begin() as connection:
@@ -189,6 +209,7 @@ class ImportService:
             skipped_rows=skipped_rows,
             missing_tables=missing_tables,
             dataset_id=dataset_id,
+            dataset_profiles={name: profile.to_dict() for name, profile in profiles.items()},
         )
 
     def _import_csv(
@@ -218,10 +239,15 @@ class ImportService:
         mapping = suggest_mapping(target_table, list(first_chunk.columns))
         _validate_mappings({target_table: mapping})
         missing_tables = sorted(STANDARD_TABLES.difference({target_table}))
+        profile = infer_dataset_profile(
+            target_table,
+            first_chunk.loc[:, list(mapping.mapping)].rename(columns=mapping.mapping),
+        )
         quality_audit: dict[str, Any] = {
             "missing_tables": missing_tables,
             "tables": {},
             "relationship_anomalies": {},
+            "dataset_profiles": {target_table: profile.to_dict()},
         }
         dataset_id = str(uuid4())
         with self._engine.begin() as connection:
@@ -255,6 +281,7 @@ class ImportService:
                         age_fill_value=age_fill_value,
                         seen_keys=seen_keys,
                         mark_outliers=False,
+                        deduplication_policy=profile.deduplication_policy,
                     )
                     _merge_summary(total_summary, result.summary)
                     _merge_relationship_anomalies(
@@ -313,6 +340,7 @@ class ImportService:
             skipped_rows=skipped_rows,
             missing_tables=missing_tables,
             dataset_id=dataset_id,
+            dataset_profiles={target_table: profile.to_dict()},
         )
 
     def _csv_age_fill_value(

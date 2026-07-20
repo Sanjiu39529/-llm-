@@ -222,6 +222,13 @@ def _show_import_answer(message: dict[str, Any], api_url: str) -> None:
         return
     detected = "、".join(result.get("processed_tables", []))
     st.success(f"已完成导入：{detected}，写入 {result.get('written_rows', 0)} 行。")
+    for table_name, profile in result.get("dataset_profiles", {}).items():
+        with st.container(border=True):
+            st.caption(f"数据画像 · {table_name}")
+            st.write(f"行粒度：{profile['row_granularity']}")
+            policy = "保留全部行" if profile["deduplication_policy"] == "preserve_rows" else "按业务键去重"
+            st.write(f"去重策略：{policy}（置信度 {profile['confidence']:.0%}）")
+            st.caption(profile["rationale"])
     for recommendation in result.get("analysis_recommendations", []):
         st.write(f"- {recommendation}")
 

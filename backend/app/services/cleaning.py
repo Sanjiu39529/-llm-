@@ -363,6 +363,7 @@ def clean_frame(
     age_fill_value: int | None = None,
     seen_keys: set[tuple[object, ...]] | None = None,
     mark_outliers: bool = True,
+    deduplication_policy: str = "business_key",
 ) -> CleanResult:
     """按标准表规则清洗已完成字段映射的数据框。"""
     if table_name not in TABLE_CONTRACTS:
@@ -376,7 +377,13 @@ def clean_frame(
     summary = CleanSummary()
     cleaned = _validate_rows(table_name, cleaned, summary)
     _clean_age(cleaned, summary, age_fill_value)
-    duplicate = _deduplicate(cleaned, table_name, seen_keys)
+    if deduplication_policy not in {"business_key", "preserve_rows"}:
+        raise ValueError(f"unsupported_deduplication_policy: {deduplication_policy}")
+    duplicate = (
+        _deduplicate(cleaned, table_name, seen_keys)
+        if deduplication_policy == "business_key"
+        else pd.Series(False, index=cleaned.index)
+    )
     summary.deduplicated = int(duplicate.sum())
     cleaned = cleaned.loc[~duplicate].copy()
 

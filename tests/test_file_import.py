@@ -183,6 +183,28 @@ def test_chunked_csv_uses_global_age_mean_and_cross_chunk_deduplication(
         assert rows == [("u1", 20), ("u2", 27), ("u3", 40), ("u4", 27)]
 
 
+def test_chunked_funnel_csv_preserves_identical_anonymous_user_rows(tmp_path: Path) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_import_tables(
+        engine,
+        """
+        CREATE TABLE behavior_funnel (
+            total_pages_visited INTEGER NOT NULL,
+            home_page INTEGER,
+            import_batch_id INTEGER NOT NULL
+        )
+        """,
+    )
+    path = tmp_path / "funnel.csv"
+    path.write_text("total_pages_visited,home_page\n3,1\n3,1\n", encoding="utf-8")
+
+    report = ImportService(engine, csv_chunk_size=1).import_file(path)
+
+    assert report.written_rows == 2
+    assert report.dataset_profiles is not None
+    assert report.dataset_profiles["behavior_funnel"]["deduplication_policy"] == "preserve_rows"
+
+
 def test_chunked_csv_marks_outlier_against_complete_batch(tmp_path: Path) -> None:
     engine = create_engine("sqlite:///:memory:")
     _create_import_tables(

@@ -50,6 +50,15 @@ def test_clean_orders_removes_non_positive_amount_and_duplicate_key() -> None:
     assert result.summary.deduplicated == 1
 
 
+def test_cleaning_can_preserve_independent_rows_with_identical_values() -> None:
+    frame = pd.DataFrame({"total_pages_visited": [3, 3], "home_page": [1, 1]})
+
+    result = clean_frame("behavior_funnel", frame, deduplication_policy="preserve_rows")
+
+    assert len(result.frame) == 2
+    assert result.summary.deduplicated == 0
+
+
 def test_clean_orders_skips_invalid_dates_and_non_positive_amounts() -> None:
     """不可解析或未来日期、非正金额的订单不能入库。"""
     frame = pd.DataFrame(
