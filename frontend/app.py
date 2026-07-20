@@ -77,10 +77,28 @@ def main() -> None:
 
     st.session_state.setdefault("chat_history", [])
     st.session_state.setdefault("pending_uploads", {})
+    st.session_state.setdefault("active_datasets", {})
+    st.session_state.setdefault("selected_dataset_ids", [])
+    if "pending_dataset_selection" in st.session_state:
+        st.session_state.selected_dataset_ids = st.session_state.pop(
+            "pending_dataset_selection"
+        )
     if st.button("新建对话", icon=":material/add_comment:"):
         st.session_state.chat_history = []
         st.session_state.pending_uploads = {}
+        st.session_state.active_datasets = {}
+        st.session_state.selected_dataset_ids = []
         st.rerun()
+    dataset_options = list(st.session_state.active_datasets)
+    if dataset_options:
+        st.sidebar.multiselect(
+            "当前分析数据集",
+            dataset_options,
+            format_func=lambda dataset_id: st.session_state.active_datasets[dataset_id][
+                "label"
+            ],
+            key="selected_dataset_ids",
+        )
     if not st.session_state.chat_history:
         st.info("直接提问，或在下方附加 CSV/Excel。示例：分析用户行为漏斗｜查看 GMV｜GMV 的口径是什么？")
     for message in st.session_state.chat_history:
@@ -108,10 +126,13 @@ def main() -> None:
         with st.chat_message("user"):
             st.write(content)
         context_tables: list[str] = []
+        current_dataset_ids: list[str] = []
         pending_import = False
         for upload in files:
             import_result = _append_import_message(api_url, upload.name, upload.getvalue())
             context_tables.extend(import_result.get("processed_tables", []))
+            if import_result.get("dataset_id"):
+                current_dataset_ids.append(import_result["dataset_id"])
             pending_import = pending_import or import_result.get("status") in {
                 "needs_table_confirmation", "needs_csv_confirmation",
                 "database_requires_attention", "import_requires_attention",
@@ -120,7 +141,17 @@ def main() -> None:
             try:
                 result = _post_json(
                     f"{api_url}/api/dashboard/ask",
-                    {"question": text, "context_tables": sorted(set(context_tables))},
+                    {
+                        "question": text,
+                        "context_tables": sorted(
+                            set(context_tables)
+                            | _selected_context_tables()
+                        ),
+                        "dataset_ids": sorted(
+                            set(st.session_state.selected_dataset_ids)
+                            | set(current_dataset_ids)
+                        ),
+                    },
                 )
             except (URLError, TimeoutError, RuntimeError) as exc:
                 result = {"error": f"暂时无法连接分析服务：{exc}"}
@@ -138,6 +169,7 @@ def _append_import_message(api_url: str, filename: str, content: bytes) -> dict[
     upload_id = uuid4().hex
     if result.get("status") == "needs_table_confirmation":
         st.session_state.pending_uploads[upload_id] = {"filename": filename, "content": content}
+    _remember_dataset(result, filename)
     message = {"role": "assistant", "content": {"kind": "import", "data": result, "upload_id": upload_id}}
     with st.chat_message("assistant", avatar=":material/smart_toy:"):
         _show_assistant_message(message, api_url)
@@ -175,6 +207,7 @@ def _show_import_answer(message: dict[str, Any], api_url: str) -> None:
                 st.warning(f"暂时无法连接导入服务：{exc}")
                 return
             content["data"] = imported
+            _remember_dataset(imported, upload["filename"])
             st.session_state.pending_uploads.pop(content["upload_id"], None)
             st.rerun()
         return
@@ -193,6 +226,27 @@ def _show_import_answer(message: dict[str, Any], api_url: str) -> None:
         st.write(f"- {recommendation}")
 
 
+def _remember_dataset(result: dict[str, Any], filename: str) -> None:
+    dataset_id = result.get("dataset_id")
+    if not dataset_id:
+        return
+    st.session_state.active_datasets[dataset_id] = {
+        "label": filename,
+        "tables": sorted(set(result.get("processed_tables", []))),
+    }
+    selected = set(st.session_state.get("selected_dataset_ids", []))
+    selected.add(dataset_id)
+    st.session_state.pending_dataset_selection = sorted(selected)
+
+
+def _selected_context_tables() -> set[str]:
+    tables: set[str] = set()
+    for dataset_id in st.session_state.get("selected_dataset_ids", []):
+        dataset = st.session_state.active_datasets.get(dataset_id, {})
+        tables.update(dataset.get("tables", []))
+    return tables
+
+
 def _show_dashboard_answer(result: dict[str, Any]) -> None:
     if result.get("error"):
         st.warning(result["error"])
@@ -204,9 +258,17 @@ def _show_dashboard_answer(result: dict[str, Any]) -> None:
     elif intent == "funnel":
         _show_funnel(result.get("dashboard", {}))
     elif intent == "knowledge":
-        for item in result.get("knowledge", []):
-            st.caption(f"来源：{item['source']} · {item['title']}")
-            st.write(item["content"])
+        citations = {item["index"]: item for item in result.get("citations", [])}
+        for index, item in enumerate(result.get("knowledge", []), start=1):
+            citation = citations.get(index, item)
+            with st.container(border=True):
+                st.caption(
+                    f"[{index}] {citation['source']} · {citation['title']}"
+                )
+                st.write(item["content"])
+    if result.get("trace_events"):
+        with st.expander("运行轨迹", icon=":material/account_tree:"):
+            st.dataframe(pd.DataFrame(result["trace_events"]), hide_index=True)
 
 
 def _show_report(report: dict[str, Any]) -> None:
@@ -217,21 +279,80 @@ def _show_report(report: dict[str, Any]) -> None:
         for name, metric in sales.items()
         if name in labels and metric.get("available") and metric.get("value") is not None
     }
-    columns = st.columns(len(labels))
-    for column, name in zip(columns, labels):
-        column.metric(labels[name], available.get(name, "数据缺失"))
+    comparison = report.get("metrics", {}).get("gmv_comparisons", {}).get("day", {})
+    gmv_delta = comparison.get("change") if comparison.get("available") else None
+    with st.container(horizontal=True):
+        for name in labels:
+            delta = None
+            if name == "gmv" and gmv_delta is not None:
+                delta = f"{float(gmv_delta):+.1%} 日环比"
+            st.metric(
+                labels[name],
+                _format_metric(available.get(name)),
+                delta=delta,
+                border=True,
+            )
     if available:
-        chart = pd.DataFrame({"金额": [available[name] for name in available]}, index=[labels[name] for name in available])
-        st.bar_chart(chart)
+        chart = pd.DataFrame(
+            {
+                "指标": [labels[name] for name in available],
+                "金额": [float(available[name]) for name in available],
+            }
+        )
+        with st.container(border=True):
+            st.subheader("销售结构")
+            st.bar_chart(chart, x="指标", y="金额", horizontal=True)
+
+    users = report.get("metrics", {}).get("traffic_and_customer", {})
+    channels = [
+        {"渠道": name, "UV": value.get("uv"), "PV": value.get("pv")}
+        for name, value in users.get("channels", {}).items()
+        if value.get("available")
+    ]
+    products = report.get("metrics", {}).get("products", {})
+    ranking = products.get("top_by_revenue", {}).get("items", [])
+    left, right = st.columns(2)
+    if channels:
+        with left.container(border=True, height="stretch"):
+            st.subheader("渠道流量")
+            st.bar_chart(pd.DataFrame(channels), x="渠道", y=["UV", "PV"])
+    if ranking:
+        with right.container(border=True, height="stretch"):
+            st.subheader("商品销售排行")
+            st.dataframe(
+                pd.DataFrame(ranking),
+                hide_index=True,
+                column_config={
+                    "revenue": st.column_config.NumberColumn("销售额", format="%.2f"),
+                    "quantity": st.column_config.NumberColumn("销量"),
+                },
+            )
     if report.get("valuable_anomalies"):
-        st.warning("发现值得复核的异常")
-        st.json(report["valuable_anomalies"])
+        with st.container(border=True):
+            st.subheader("值得复核的异常", help="异常记录不会在清洗阶段被擅自删除")
+            st.dataframe(pd.DataFrame(report["valuable_anomalies"]), hide_index=True)
     if report.get("recommendations"):
-        st.subheader("运营建议")
-        for recommendation in report["recommendations"]:
-            st.write(f"- {recommendation}")
+        with st.container(border=True):
+            st.subheader("运营建议")
+            for recommendation in report["recommendations"]:
+                st.write(f":material/arrow_right: {recommendation}")
     if report.get("missing_dependencies"):
-        st.info("缺少依赖表：" + "、".join(report["missing_dependencies"]))
+        st.info(
+            "缺少依赖表：" + "、".join(report["missing_dependencies"]),
+            icon=":material/info:",
+        )
+    if report.get("quality_warnings"):
+        with st.expander("数据质量说明", icon=":material/fact_check:"):
+            st.json(report["quality_warnings"])
+
+
+def _format_metric(value: object) -> str:
+    if value is None:
+        return "数据缺失"
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _show_funnel(report: dict[str, Any]) -> None:
@@ -245,8 +366,17 @@ def _show_funnel(report: dict[str, Any]) -> None:
     stages = pd.DataFrame(report["funnel"])
     with st.container(border=True):
         st.subheader("页面访问漏斗")
-        st.bar_chart(stages, x="stage", y="visitors")
-        st.dataframe(stages, hide_index=True)
+        st.bar_chart(stages, x="stage", y="visitors", horizontal=True)
+        st.dataframe(
+            stages,
+            hide_index=True,
+            column_config={
+                "visitors": st.column_config.NumberColumn("访客数"),
+                "conversion_from_previous": st.column_config.NumberColumn(
+                    "阶段转化率", format="percent"
+                ),
+            },
+        )
     dimensions = pd.DataFrame(report["source_conversion"])
     if not dimensions.empty:
         with st.container(border=True):

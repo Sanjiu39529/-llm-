@@ -47,3 +47,29 @@ def test_report_returns_structured_charts_for_complete_inputs() -> None:
     assert report["charts"]["traffic_overview"]["available"] is True
     assert report["charts"]["ad_efficiency"]["available"] is True
     assert report["charts"]["product_ranking"]["available"] is True
+
+
+def test_report_uses_preaggregated_daily_gmv_for_anomaly_series() -> None:
+    daily = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-07-01", periods=20, freq="D"),
+            "gmv": [10] * 19 + [1000],
+        }
+    )
+    report = build_analysis_report(
+        {
+            "_daily_gmv": daily,
+            "order_info": pd.DataFrame(
+                {
+                    "order_id": pd.Series(dtype="object"),
+                    "order_time": pd.Series(dtype="datetime64[ns]"),
+                    "order_amount": pd.Series(dtype="object"),
+                }
+            ),
+        },
+        datetime(2026, 7, 1),
+        datetime(2026, 7, 21),
+        MetricConfig(),
+    )
+
+    assert any(item["value"] == 1000 for item in report["valuable_anomalies"])

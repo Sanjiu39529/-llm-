@@ -122,6 +122,28 @@ def _valuable_anomalies(
     config: MetricConfig,
     comparisons: Mapping[str, object],
 ) -> list[dict[str, object]]:
+    series = _daily_gmv_series(tables, start, end)
+    anomalies = [
+        {"metric": "gmv", "date": item.date, "value": item.value, "evidences": item.evidences}
+        for item in detect_series_anomalies(series, config)
+        if item.valuable
+    ]
+    for baseline, comparison in comparisons.items():
+        if getattr(comparison, "available", False) and comparison.level == "severe":
+            anomalies.append({"metric": "gmv", "baseline": baseline, "change": comparison.change, "evidences": ("severe_change",)})
+    return anomalies
+
+
+def _daily_gmv_series(
+    tables: Mapping[str, pd.DataFrame],
+    start: datetime | pd.Timestamp,
+    end: datetime | pd.Timestamp,
+) -> pd.Series:
+    aggregate = tables.get("_daily_gmv")
+    if aggregate is not None and {"date", "gmv"}.issubset(aggregate.columns):
+        dates = pd.to_datetime(aggregate["date"], errors="coerce")
+        mask = dates.ge(start) & dates.lt(end)
+        return pd.Series(aggregate.loc[mask, "gmv"].values, index=dates.loc[mask])
     series: dict[pd.Timestamp, object] = {}
     cursor = pd.Timestamp(start).normalize()
     stop = pd.Timestamp(end).normalize()
@@ -132,15 +154,7 @@ def _valuable_anomalies(
         if metric.available:
             series[cursor] = metric.value
         cursor += timedelta(days=1)
-    anomalies = [
-        {"metric": "gmv", "date": item.date, "value": item.value, "evidences": item.evidences}
-        for item in detect_series_anomalies(pd.Series(series), config)
-        if item.valuable
-    ]
-    for baseline, comparison in comparisons.items():
-        if getattr(comparison, "available", False) and comparison.level == "severe":
-            anomalies.append({"metric": "gmv", "baseline": baseline, "change": comparison.change, "evidences": ("severe_change",)})
-    return anomalies
+    return pd.Series(series)
 
 
 def _recommendations(

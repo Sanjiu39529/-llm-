@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Mapping, TypedDict
 from urllib.error import URLError
+from uuid import uuid4
 
 import pandas as pd
 from langgraph.graph import END, START, StateGraph
@@ -37,6 +38,7 @@ class AgentState(TypedDict, total=False):
     answer: str
     error: str
     trace: list[str]
+    citations: tuple[dict[str, object], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +50,9 @@ class AgentRunResult:
     knowledge: tuple[KnowledgeChunk, ...]
     error: str | None
     trace: tuple[str, ...]
+    run_id: str
+    trace_events: tuple[dict[str, object], ...]
+    citations: tuple[dict[str, object], ...]
 
 
 class EcommerceSupervisor:
@@ -88,6 +93,7 @@ class EcommerceSupervisor:
                 "trace": [],
             }
         )
+        trace = tuple(state.get("trace", []))
         return AgentRunResult(
             route=state["route"],
             answer=state.get("answer"),
@@ -95,7 +101,13 @@ class EcommerceSupervisor:
             query_result=state.get("query_result"),
             knowledge=state.get("knowledge", ()),
             error=state.get("error"),
-            trace=tuple(state.get("trace", [])),
+            trace=trace,
+            run_id=str(uuid4()),
+            trace_events=tuple(
+                {"sequence": index, "event": event}
+                for index, event in enumerate(trace, start=1)
+            ),
+            citations=state.get("citations", ()),
         )
 
     def _build_graph(self):
@@ -190,4 +202,8 @@ class EcommerceSupervisor:
             "knowledge": knowledge,
             "answer": answer,
             "trace": trace,
+            "citations": tuple(
+                chunk.citation(index)
+                for index, chunk in enumerate(knowledge, start=1)
+            ),
         }

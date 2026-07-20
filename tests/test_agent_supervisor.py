@@ -84,3 +84,7 @@ def test_supervisor_can_use_optional_llm_only_after_local_rag_retrieval():
 
     assert result.answer == "成交 GMV 按固定口径计算。[1]"
     assert result.trace == ("supervisor:knowledge", "tool:knowledge_search", "tool:rag_answer")
+    assert result.citations[0]["index"] == 1
+    assert result.citations[0]["chunk_id"]
+    assert result.run_id
+    assert result.trace_events[-1]["event"] == "tool:rag_answer"

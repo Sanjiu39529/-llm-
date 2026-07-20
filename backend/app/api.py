@@ -51,6 +51,7 @@ class DashboardQuestionRequest(BaseModel):
     start: datetime | None = None
     end: datetime | None = None
     context_tables: list[str] = Field(default_factory=list)
+    dataset_ids: list[str] = Field(default_factory=list)
 
 
 def create_app(
@@ -73,7 +74,10 @@ def create_app(
                 "answer": result.answer,
                 "error": result.error,
                 "trace": result.trace,
+                "run_id": result.run_id,
+                "trace_events": result.trace_events,
                 "knowledge": result.knowledge,
+                "citations": result.citations,
             }
         )
 
@@ -91,12 +95,18 @@ def create_app(
                     "error": result.error,
                     "knowledge": result.knowledge,
                     "trace": result.trace,
+                    "run_id": result.run_id,
+                    "trace_events": result.trace_events,
+                    "citations": result.citations,
                 }
             )
 
         if intent == "funnel":
-            tables = table_loader() if table_loader else _load_database_tables(["behavior_funnel"])
-            funnel = build_funnel_report(tables.get("behavior_funnel"))
+            funnel = (
+                build_funnel_report(table_loader().get("behavior_funnel"))
+                if table_loader
+                else _load_funnel_report(request.dataset_ids)
+            )
             answer = (
                 "已根据用户行为数据生成页面漏斗与来源转化看板。"
                 if funnel["available"]
@@ -108,9 +118,19 @@ def create_app(
         start = request.start or end - timedelta(days=30)
         if start >= end:
             raise HTTPException(status_code=422, detail="start_must_be_before_end")
-        tables = table_loader() if table_loader else _load_database_tables()
+        config = MetricConfig()
+        tables = (
+            table_loader()
+            if table_loader
+            else _load_database_tables(
+                start=start,
+                end=end,
+                dataset_ids=request.dataset_ids,
+                config=config,
+            )
+        )
         report = agent.run(
-            "分析请求", tables=tables, start=start, end=end, config=MetricConfig()
+            "分析请求", tables=tables, start=start, end=end, config=config
         )
         if report.error:
             raise HTTPException(status_code=422, detail=report.error)
@@ -120,6 +140,8 @@ def create_app(
                 "answer": "已按固定指标口径生成经营分析看板。未提供统计时间时默认展示最近 30 天。",
                 "dashboard": report.report,
                 "trace": report.trace,
+                "run_id": report.run_id,
+                "trace_events": report.trace_events,
                 "period": {"start": start, "end": end},
             }
         )
@@ -132,20 +154,43 @@ def create_app(
         )
         if result.error:
             raise HTTPException(status_code=422, detail=result.error)
-        return jsonable_encoder({"report": result.report, "trace": result.trace})
+        return jsonable_encoder(
+            {
+                "report": result.report,
+                "trace": result.trace,
+                "run_id": result.run_id,
+                "trace_events": result.trace_events,
+            }
+        )
 
     @app.get("/api/reports")
     def report_from_database(start: datetime, end: datetime) -> dict[str, Any]:
-        tables = table_loader() if table_loader else _load_database_tables()
-        result = agent.run("分析请求", tables=tables, start=start, end=end, config=MetricConfig())
+        config = MetricConfig()
+        tables = (
+            table_loader()
+            if table_loader
+            else _load_database_tables(start=start, end=end, config=config)
+        )
+        result = agent.run("分析请求", tables=tables, start=start, end=end, config=config)
         if result.error:
             raise HTTPException(status_code=422, detail=result.error)
-        return jsonable_encoder({"report": result.report, "trace": result.trace})
+        return jsonable_encoder(
+            {
+                "report": result.report,
+                "trace": result.trace,
+                "run_id": result.run_id,
+                "trace_events": result.trace_events,
+            }
+        )
 
     @app.get("/api/funnels")
     def funnel_from_database() -> dict[str, Any]:
-        tables = table_loader() if table_loader else _load_database_tables(["behavior_funnel"])
-        return jsonable_encoder(build_funnel_report(tables.get("behavior_funnel")))
+        report = (
+            build_funnel_report(table_loader().get("behavior_funnel"))
+            if table_loader
+            else _load_funnel_report()
+        )
+        return jsonable_encoder(report)
 
     @app.post("/api/imports")
     async def import_data(
@@ -287,10 +332,41 @@ def _dashboard_intent(question: str, context_tables: list[str] | None = None) ->
     return "knowledge"
 
 
-def _load_database_tables(table_names: list[str] | None = None) -> Mapping[str, pd.DataFrame]:
+def _load_database_tables(
+    table_names: list[str] | None = None,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    dataset_ids: list[str] | None = None,
+    config: MetricConfig | None = None,
+) -> Mapping[str, pd.DataFrame]:
     settings = Settings()
-    return AnalysisRepository().load_tables(
-        create_engine(settings.database_url), table_names or None
+    metric_config = config or MetricConfig()
+    engine = create_engine(settings.database_url)
+    repository = AnalysisRepository()
+    tables = repository.load_tables(
+        engine,
+        table_names or None,
+        start=start,
+        end=end,
+        history_days=metric_config.customer_history_days,
+        attribution_lookahead_days=metric_config.roi_lookback_days,
+        dataset_ids=dataset_ids,
+    )
+    if start is not None and end is not None and (
+        table_names is None or "order_info" in table_names
+    ):
+        baseline_start = start - timedelta(days=metric_config.customer_history_days)
+        tables["_daily_gmv"] = repository.load_daily_gmv(
+            engine, baseline_start, end, dataset_ids
+        )
+    return tables
+
+
+def _load_funnel_report(dataset_ids: list[str] | None = None) -> dict[str, object]:
+    settings = Settings()
+    return AnalysisRepository().load_funnel_report(
+        create_engine(settings.database_url), dataset_ids
     )
 
 

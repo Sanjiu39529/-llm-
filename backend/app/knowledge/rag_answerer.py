@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Protocol
 from urllib.request import Request, urlopen
 
@@ -52,6 +53,10 @@ class OpenAICompatibleRagAnswerer:
         with urlopen(request, timeout=30) as response:  # nosec B310: URL is local config.
             body = json.loads(response.read().decode("utf-8"))
         try:
-            return str(body["choices"][0]["message"]["content"]).strip()
+            answer = str(body["choices"][0]["message"]["content"]).strip()
         except (IndexError, KeyError, TypeError) as exc:
             raise ValueError("llm_response_missing_answer") from exc
+        citations = {int(value) for value in re.findall(r"\[(\d+)\]", answer)}
+        if not citations or any(index < 1 or index > len(chunks) for index in citations):
+            raise ValueError("llm_response_invalid_citations")
+        return answer

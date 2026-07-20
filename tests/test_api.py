@@ -132,6 +132,40 @@ def test_dashboard_question_routes_sales_question_to_fixed_metric_report():
     assert response.json()["dashboard"]["metrics"]["sales"]["gmv"]["value"] == 100.0
 
 
+def test_dashboard_question_scopes_database_load_to_selected_datasets(monkeypatch):
+    captured = {}
+
+    def load_tables(**kwargs):
+        captured.update(kwargs)
+        return {
+            "order_info": pd.DataFrame(
+                [
+                    {
+                        "order_id": "o1",
+                        "order_time": pd.Timestamp("2026-01-01"),
+                        "order_amount": "100",
+                    }
+                ]
+            )
+        }
+
+    monkeypatch.setattr("backend.app.api._load_database_tables", load_tables)
+    client = TestClient(create_app(EcommerceSupervisor()))
+
+    response = client.post(
+        "/api/dashboard/ask",
+        json={
+            "question": "查看 GMV",
+            "start": "2026-01-01T00:00:00",
+            "end": "2026-01-02T00:00:00",
+            "dataset_ids": ["dataset-a", "dataset-b"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["dataset_ids"] == ["dataset-a", "dataset-b"]
+
+
 def test_unknown_file_structure_returns_guided_confirmation_instead_of_import_error():
     response = _import_recovery("cannot_auto_identify: reason=no_matching_table candidates=[]")
 
