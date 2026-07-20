@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ecommerce-generic-analysis": {
+      "command": "D:\\shufen\\ecommerce-agent\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "backend.app.mcp_server"]
+    }
+  }
+}
