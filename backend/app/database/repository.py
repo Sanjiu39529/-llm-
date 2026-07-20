@@ -196,6 +196,75 @@ class ImportRepository:
             existing.update(row[0] for row in rows)
         return existing
 
+    def mark_batch_outliers(
+        self,
+        connection: Connection,
+        table_name: str,
+        batch_id: int,
+        amount_columns: list[str],
+    ) -> None:
+        """Apply the existing Q3 + 3*IQR rule across the complete imported batch."""
+        contract = TABLE_CONTRACTS[table_name]
+        allowed = set(contract.aliases)
+        for column in amount_columns:
+            if column not in allowed:
+                raise ValueError(f"unsupported outlier column: {table_name}.{column}")
+            count = int(
+                connection.scalar(
+                    text(
+                        f"SELECT COUNT({column}) FROM {table_name} "
+                        "WHERE import_batch_id = :batch_id"
+                    ),
+                    {"batch_id": batch_id},
+                )
+                or 0
+            )
+            if count == 0:
+                continue
+            q1 = self._batch_quantile(
+                connection, table_name, column, batch_id, count, Decimal("0.25")
+            )
+            q3 = self._batch_quantile(
+                connection, table_name, column, batch_id, count, Decimal("0.75")
+            )
+            threshold = q3 + Decimal(3) * (q3 - q1)
+            connection.execute(
+                text(
+                    f"UPDATE {table_name} SET is_outlier = TRUE "
+                    f"WHERE import_batch_id = :batch_id AND {column} > :threshold"
+                ),
+                {"batch_id": batch_id, "threshold": str(threshold)},
+            )
+
+    @staticmethod
+    def _batch_quantile(
+        connection: Connection,
+        table_name: str,
+        column: str,
+        batch_id: int,
+        count: int,
+        quantile: Decimal,
+    ) -> Decimal:
+        position = Decimal(count - 1) * quantile
+        lower_index = int(position)
+        upper_index = lower_index if position == lower_index else lower_index + 1
+
+        def value_at(offset: int) -> Decimal:
+            value = connection.scalar(
+                text(
+                    f"SELECT {column} FROM {table_name} "
+                    f"WHERE import_batch_id = :batch_id AND {column} IS NOT NULL "
+                    f"ORDER BY {column} LIMIT 1 OFFSET {offset}"
+                ),
+                {"batch_id": batch_id},
+            )
+            return Decimal(str(value))
+
+        lower = value_at(lower_index)
+        upper = value_at(upper_index)
+        fraction = position - lower_index
+        return lower + (upper - lower) * fraction
+
     def complete_batch(
         self,
         connection: Connection,

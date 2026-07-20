@@ -56,6 +56,15 @@ def test_csv_without_matching_table_returns_explainable_error(tmp_path: Path) ->
         FileImportAdapter().read(path)
 
 
+def test_csv_adapter_yields_bounded_chunks(tmp_path: Path) -> None:
+    path = tmp_path / "users.csv"
+    path.write_text("user_id\nu1\nu2\nu3\nu4\nu5\n", encoding="utf-8")
+
+    chunks = list(FileImportAdapter().iter_csv(path, chunk_size=2))
+
+    assert [len(chunk) for chunk in chunks] == [2, 2, 1]
+
+
 def _create_import_tables(engine: object, business_ddl: str) -> None:
     with engine.begin() as connection:
         connection.execute(
@@ -139,6 +148,75 @@ def test_import_service_reuses_same_completed_file_without_duplicate_rows(
         assert connection.scalar(text("SELECT COUNT(*) FROM import_batch")) == 1
         assert connection.scalar(text("SELECT COUNT(*) FROM user_info")) == 1
         assert connection.scalar(text("SELECT last_accessed_at FROM import_batch")) is not None
+
+
+def test_chunked_csv_uses_global_age_mean_and_cross_chunk_deduplication(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_import_tables(
+        engine,
+        """
+        CREATE TABLE user_info (
+            user_id TEXT PRIMARY KEY,
+            age INTEGER,
+            import_batch_id INTEGER NOT NULL
+        )
+        """,
+    )
+    path = tmp_path / "users.csv"
+    path.write_text(
+        "user_id,age\nu1,20\nu2,\nu3,40\nu4,\nu1,20\n",
+        encoding="utf-8",
+    )
+
+    report = ImportService(engine, csv_chunk_size=2).import_file(
+        path, target_table="user_info"
+    )
+
+    assert report.written_rows == 4
+    assert report.skipped_rows == 1
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("SELECT user_id, age FROM user_info ORDER BY user_id")
+        ).all()
+        assert rows == [("u1", 20), ("u2", 27), ("u3", 40), ("u4", 27)]
+
+
+def test_chunked_csv_marks_outlier_against_complete_batch(tmp_path: Path) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    _create_import_tables(
+        engine,
+        """
+        CREATE TABLE product_info (
+            product_id TEXT PRIMARY KEY,
+            product_name TEXT NOT NULL,
+            price NUMERIC,
+            is_outlier BOOLEAN NOT NULL DEFAULT FALSE,
+            import_batch_id INTEGER NOT NULL
+        )
+        """,
+    )
+    path = tmp_path / "products.csv"
+    path.write_text(
+        "product_id,product_name,price\n"
+        "p1,a,10\n"
+        "p2,b,10\n"
+        "p3,c,10\n"
+        "p4,d,10\n"
+        "p5,e,1000\n",
+        encoding="utf-8",
+    )
+
+    ImportService(engine, csv_chunk_size=2).import_file(
+        path, target_table="product_info"
+    )
+
+    with engine.connect() as connection:
+        flags = connection.execute(
+            text("SELECT product_id, is_outlier FROM product_info ORDER BY product_id")
+        ).all()
+        assert flags == [("p1", 0), ("p2", 0), ("p3", 0), ("p4", 0), ("p5", 1)]
 
 
 def test_import_service_rejects_unmapped_required_fields_before_writes(

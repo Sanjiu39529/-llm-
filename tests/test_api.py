@@ -184,8 +184,12 @@ def test_import_endpoint_passes_batch_size_by_keyword(monkeypatch):
     captured = {}
 
     class FakeImportService:
-        def __init__(self, engine, *, batch_size):
+        def __init__(
+            self, engine, *, batch_size, csv_chunk_size, max_file_size_mb
+        ):
             captured["batch_size"] = batch_size
+            captured["csv_chunk_size"] = csv_chunk_size
+            captured["max_file_size_mb"] = max_file_size_mb
 
         def import_file(self, path, table, *, file_hash, file_size):
             captured["file_hash"] = file_hash
@@ -194,7 +198,12 @@ def test_import_endpoint_passes_batch_size_by_keyword(monkeypatch):
 
     monkeypatch.setattr(
         "backend.app.api.Settings",
-        lambda: SimpleNamespace(database_url="sqlite://", import_batch_size=321),
+        lambda: SimpleNamespace(
+            database_url="sqlite://",
+            import_batch_size=321,
+            import_csv_chunk_size=123,
+            import_max_file_size_mb=2,
+        ),
     )
     monkeypatch.setattr("backend.app.api.create_engine", lambda url: object())
     monkeypatch.setattr("backend.app.api.ImportService", FakeImportService)
@@ -207,5 +216,28 @@ def test_import_endpoint_passes_batch_size_by_keyword(monkeypatch):
     assert response.status_code == 200
     assert response.json()["processed_tables"] == ["behavior_funnel"]
     assert captured["batch_size"] == 321
+    assert captured["csv_chunk_size"] == 123
+    assert captured["max_file_size_mb"] == 2
     assert len(captured["file_hash"]) == 64
     assert captured["file_size"] == len(b"total_pages_visited\n1\n")
+
+
+def test_import_endpoint_rejects_file_over_configured_limit(monkeypatch):
+    monkeypatch.setattr(
+        "backend.app.api.Settings",
+        lambda: SimpleNamespace(
+            database_url="sqlite://",
+            import_batch_size=100,
+            import_csv_chunk_size=10,
+            import_max_file_size_mb=1,
+        ),
+    )
+    client = TestClient(create_app(EcommerceSupervisor()))
+
+    response = client.post(
+        "/api/imports",
+        files={"file": ("large.csv", b"x" * (1024 * 1024 + 1), "text/csv")},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "file_too_large: max_size_mb=1"

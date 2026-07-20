@@ -8,6 +8,8 @@ class Settings(BaseSettings):
 
     database_url: str
     import_batch_size: int = 1000
+    import_csv_chunk_size: int = 10000
+    import_max_file_size_mb: int = 100
     nl2sql_max_rows: int = 1000
     llm_base_url: str | None = None
     llm_api_key: str | None = None

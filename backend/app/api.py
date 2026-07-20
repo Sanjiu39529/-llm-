@@ -32,6 +32,10 @@ from backend.app.services.import_service import ImportService
 logger = logging.getLogger(__name__)
 
 
+class UploadTooLargeError(ValueError):
+    pass
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
 
@@ -153,15 +157,24 @@ def create_app(
             raise HTTPException(status_code=400, detail="unsupported_file_type")
         with TemporaryDirectory() as directory:
             path = Path(directory) / filename
-            file_hash, file_size = await _save_upload(file, path)
             try:
                 settings = Settings()
+                file_hash, file_size = await _save_upload(
+                    file,
+                    path,
+                    max_bytes=settings.import_max_file_size_mb * 1024 * 1024,
+                )
                 engine = create_engine(settings.database_url)
                 report = ImportService(
-                    engine, batch_size=settings.import_batch_size
+                    engine,
+                    batch_size=settings.import_batch_size,
+                    csv_chunk_size=settings.import_csv_chunk_size,
+                    max_file_size_mb=settings.import_max_file_size_mb,
                 ).import_file(
                     path, table, file_hash=file_hash, file_size=file_size
                 )
+            except UploadTooLargeError as exc:
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
             except ValueError as exc:
                 recovery = _import_recovery(str(exc))
                 if recovery is not None:
@@ -188,7 +201,9 @@ def create_app(
     return app
 
 
-async def _save_upload(file: UploadFile, path: Path) -> tuple[str, int]:
+async def _save_upload(
+    file: UploadFile, path: Path, *, max_bytes: int
+) -> tuple[str, int]:
     """Stream an upload to disk while calculating its stable content identity."""
     digest = hashlib.sha256()
     file_size = 0
@@ -197,6 +212,10 @@ async def _save_upload(file: UploadFile, path: Path) -> tuple[str, int]:
             destination.write(chunk)
             digest.update(chunk)
             file_size += len(chunk)
+            if file_size > max_bytes:
+                raise UploadTooLargeError(
+                    f"file_too_large: max_size_mb={max_bytes // 1024 // 1024}"
+                )
     return digest.hexdigest(), file_size
 
 

@@ -35,9 +35,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = _parser().parse_args(argv)
         settings = Settings()
         engine = create_engine(settings.database_url)
-        report = ImportService(engine, batch_size=settings.import_batch_size).import_file(
-            args.file, args.table
-        )
+        report = ImportService(
+            engine,
+            batch_size=settings.import_batch_size,
+            csv_chunk_size=settings.import_csv_chunk_size,
+            max_file_size_mb=settings.import_max_file_size_mb,
+        ).import_file(args.file, args.table)
         print(json.dumps(asdict(report), ensure_ascii=False))
         return 0
     except ValueError as exc:

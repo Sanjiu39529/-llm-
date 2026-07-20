@@ -247,7 +247,11 @@ def _validate_rows(
     return frame.loc[~invalid_rows].copy()
 
 
-def _clean_age(frame: pd.DataFrame, summary: CleanSummary) -> None:
+def _clean_age(
+    frame: pd.DataFrame,
+    summary: CleanSummary,
+    fill_value: int | None = None,
+) -> None:
     """将年龄越界值置空，再用当前批次有效年龄均值填充。"""
     if "age" not in frame:
         return
@@ -266,7 +270,7 @@ def _clean_age(frame: pd.DataFrame, summary: CleanSummary) -> None:
         summary.record("age", "invalid_integer", int(unparsable.sum()))
         summary.invalid += int(unparsable.sum())
     ages = ages.mask(invalid)
-    valid_mean = ages.mean()
+    valid_mean = fill_value if fill_value is not None else ages.mean()
     missing = ages.isna()
     if pd.notna(valid_mean):
         summary.filled["age"] = int(missing.sum())
@@ -306,12 +310,15 @@ def _mark_outliers(frame: pd.DataFrame) -> None:
     frame["is_outlier"] = outliers
 
 
-def _deduplicate(frame: pd.DataFrame, table_name: str) -> pd.Series:
+def _deduplicate(
+    frame: pd.DataFrame,
+    table_name: str,
+    seen_keys: set[tuple[object, ...]] | None = None,
+) -> pd.Series:
     """返回业务键重复记录掩码，支付和退款缺少 ID 时使用必填自然键。"""
     if table_name in _OPTIONAL_ID_KEYS:
         id_column, fallback_columns = _OPTIONAL_ID_KEYS[table_name]
-        seen_ids: set[object] = set()
-        seen_natural_keys: set[tuple[object, ...]] = set()
+        seen = seen_keys if seen_keys is not None else set()
         duplicate = pd.Series(False, index=frame.index)
         for index, row in frame.iterrows():
             natural_key = tuple(row[column] for column in fallback_columns)
@@ -321,26 +328,42 @@ def _deduplicate(frame: pd.DataFrame, table_name: str) -> pd.Series:
                 and bool(str(row[id_column]).strip())
             )
             identifier = row[id_column] if has_id else None
-            if natural_key in seen_natural_keys or (
-                has_id and identifier in seen_ids
-            ):
+            natural_token = ("natural", *natural_key)
+            id_token = ("id", identifier)
+            if natural_token in seen or (has_id and id_token in seen):
                 duplicate.loc[index] = True
                 continue
-            seen_natural_keys.add(natural_key)
+            seen.add(natural_token)
             if has_id:
-                seen_ids.add(identifier)
+                seen.add(id_token)
         return duplicate
-    elif table_name == "behavior_funnel":
-        return frame.duplicated(keep="first")
+    if table_name == "behavior_funnel":
+        keys = list(frame.columns)
     else:
         keys = list(_BUSINESS_KEYS[table_name])
 
     if not set(keys).issubset(frame.columns):
         return pd.Series(False, index=frame.index)
-    return frame.duplicated(subset=keys, keep="first")
+    if seen_keys is None:
+        return frame.duplicated(subset=keys, keep="first")
+    duplicate = pd.Series(False, index=frame.index)
+    for index, row in frame.iterrows():
+        token = tuple(row[column] for column in keys)
+        if token in seen_keys:
+            duplicate.loc[index] = True
+        else:
+            seen_keys.add(token)
+    return duplicate
 
 
-def clean_frame(table_name: str, frame: pd.DataFrame) -> CleanResult:
+def clean_frame(
+    table_name: str,
+    frame: pd.DataFrame,
+    *,
+    age_fill_value: int | None = None,
+    seen_keys: set[tuple[object, ...]] | None = None,
+    mark_outliers: bool = True,
+) -> CleanResult:
     """按标准表规则清洗已完成字段映射的数据框。"""
     if table_name not in TABLE_CONTRACTS:
         logger.warning("不支持的标准表: %s", table_name)
@@ -352,14 +375,22 @@ def clean_frame(table_name: str, frame: pd.DataFrame) -> CleanResult:
     cleaned = frame.copy()
     summary = CleanSummary()
     cleaned = _validate_rows(table_name, cleaned, summary)
-    _clean_age(cleaned, summary)
-    duplicate = _deduplicate(cleaned, table_name)
+    _clean_age(cleaned, summary, age_fill_value)
+    duplicate = _deduplicate(cleaned, table_name, seen_keys)
     summary.deduplicated = int(duplicate.sum())
     cleaned = cleaned.loc[~duplicate].copy()
 
     _clean_channel(cleaned, summary)
-    _mark_outliers(cleaned)
+    if mark_outliers:
+        _mark_outliers(cleaned)
     for column in TABLE_CONTRACTS[table_name].generated_fields:
         if column not in cleaned:
             cleaned[column] = False
     return CleanResult(frame=cleaned.reset_index(drop=True), summary=summary)
+
+
+def outlier_columns(table_name: str, columns: set[str]) -> list[str]:
+    """Return imported money columns that share the fixed IQR anomaly rule."""
+    if table_name not in TABLE_CONTRACTS:
+        raise ValueError(f"不支持的标准表: {table_name}")
+    return sorted(_AMOUNT_COLUMNS.intersection(columns))

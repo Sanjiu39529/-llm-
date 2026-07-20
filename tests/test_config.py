@@ -10,4 +10,6 @@ def test_settings_uses_safe_defaults() -> None:
     )
 
     assert settings.import_batch_size == 1000
+    assert settings.import_csv_chunk_size == 10000
+    assert settings.import_max_file_size_mb == 100
     assert settings.database_url.startswith("mysql+pymysql://")
