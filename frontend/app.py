@@ -191,12 +191,20 @@ def _show_import_answer(message: dict[str, Any], api_url: str) -> None:
     status = result.get("status")
     if status == "needs_table_confirmation":
         st.write(result["message"])
+        st.caption("当前没有自动识别结果；请勿仅根据文件名选择类型，类型必须与实际列字段相符。")
         selected = st.selectbox(
             "选择数据类型",
             result["available_tables"],
+            index=None,
+            placeholder="请选择与文件字段相符的数据类型",
             key=f"table_{content['upload_id']}",
         )
-        if st.button("按此类型继续导入", key=f"import_{content['upload_id']}", icon=":material/upload:"):
+        if st.button(
+            "按此类型继续导入",
+            key=f"import_{content['upload_id']}",
+            icon=":material/upload:",
+            disabled=selected is None,
+        ):
             upload = st.session_state.pending_uploads.get(content["upload_id"])
             if upload is None:
                 st.warning("文件已不在当前对话中，请重新附加后发送。")

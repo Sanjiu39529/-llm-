@@ -105,3 +105,15 @@ _show_planner_suggestions({"business_suggestions": ["先核查退款原因。"]}
 
     assert not app.exception
     assert any("AI 业务建议" in item.value for item in app.subheader)
+
+
+def test_manual_table_confirmation_does_not_preselect_an_unrelated_table() -> None:
+    script = '''
+from frontend.app import _show_import_answer
+_show_import_answer({"content": {"upload_id": "u1", "data": {"status": "needs_table_confirmation", "message": "无法识别", "available_tables": ["ad_attribution", "order_info"]}}}, "http://127.0.0.1:8000")
+'''
+    app = AppTest.from_string(script).run()
+
+    assert not app.exception
+    assert app.selectbox[0].value is None
+    assert app.button[0].disabled is True
